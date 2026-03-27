@@ -1,0 +1,16 @@
+function(baseline_add_test_exe target_name)
+  add_executable("${target_name}" "${target_name}.cpp")
+  target_link_libraries("${target_name}" PRIVATE baseline::core)
+  baseline_set_output_dirs("${target_name}")
+  set_target_properties("${target_name}" PROPERTIES FOLDER "tests")
+  add_test(NAME "${target_name}" COMMAND "${target_name}")
+endfunction()
+
+baseline_add_test_exe(test_sdf_sampling)
+baseline_add_test_exe(test_dual_sdf_gap_symmetry)
+baseline_add_test_exe(test_contact_frame_orthogonality)
+baseline_add_test_exe(test_simple_ccp_solver_smoke)
+
+if(BASELINE_HAS_SICONOS)
+  baseline_add_test_exe(test_siconos_backend_smoke)
+endif()
