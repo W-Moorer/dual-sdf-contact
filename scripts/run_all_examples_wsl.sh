@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${1:-$ROOT_DIR/build/wsl-release}"
 
+echo "[run_all_examples_wsl] Intended for a future WSL2 Ubuntu host. It is not validated on the current Windows-only machine."
+
 export PYTHONPATH="$ROOT_DIR/python${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUTF8=1
 

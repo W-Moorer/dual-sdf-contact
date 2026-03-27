@@ -18,7 +18,9 @@ Vec3 clampVec(const Vec3& value, const Vec3& lower, const Vec3& upper) {
   };
 }
 
-DistanceQueryResult makeGenericResult(const ReferenceGeometry& a, const ReferenceGeometry& b) {
+DistanceQueryResult makeGenericResult(const ReferenceGeometry& a,
+                                      const ReferenceGeometry& b,
+                                      std::string backend_name) {
   const Vec3 point_a = a.closestPoint(b.center);
   const Vec3 point_b = b.closestPoint(a.center);
   const Vec3 direction = point_b - point_a;
@@ -30,20 +32,24 @@ DistanceQueryResult makeGenericResult(const ReferenceGeometry& a, const Referenc
       normal,
       point_a,
       point_b,
-      "fallback-analytic",
+      std::move(backend_name),
   };
 }
 
-DistanceQueryResult sphereSphereDistance(const ReferenceGeometry& a, const ReferenceGeometry& b) {
+DistanceQueryResult sphereSphereDistance(const ReferenceGeometry& a,
+                                        const ReferenceGeometry& b,
+                                        std::string backend_name) {
   const Vec3 center_delta = b.center - a.center;
   const Vec3 normal = normalized(center_delta, {1.0, 0.0, 0.0});
   const Vec3 point_a = a.center + normal * a.radius;
   const Vec3 point_b = b.center - normal * b.radius;
   const double signed_gap = dot(point_b - point_a, normal);
-  return {signed_gap <= 0.0, std::max(0.0, signed_gap), normal, point_a, point_b, "fallback-analytic"};
+  return {signed_gap <= 0.0, std::max(0.0, signed_gap), normal, point_a, point_b, std::move(backend_name)};
 }
 
-DistanceQueryResult sphereBoxDistance(const ReferenceGeometry& sphere, const ReferenceGeometry& box) {
+DistanceQueryResult sphereBoxDistance(const ReferenceGeometry& sphere,
+                                      const ReferenceGeometry& box,
+                                      std::string backend_name) {
   const Vec3 closest_on_box = box.closestPoint(sphere.center);
   Vec3 direction = closest_on_box - sphere.center;
   if (norm(direction) <= 1e-12) {
@@ -58,11 +64,13 @@ DistanceQueryResult sphereBoxDistance(const ReferenceGeometry& sphere, const Ref
       normal,
       point_sphere,
       closest_on_box,
-      "fallback-analytic",
+      std::move(backend_name),
   };
 }
 
-DistanceQueryResult boxBoxDistance(const ReferenceGeometry& a, const ReferenceGeometry& b) {
+DistanceQueryResult boxBoxDistance(const ReferenceGeometry& a,
+                                   const ReferenceGeometry& b,
+                                   std::string backend_name) {
   const Vec3 delta = b.center - a.center;
   const Vec3 combined = a.half_extents + b.half_extents;
   const Vec3 separation{
@@ -105,7 +113,28 @@ DistanceQueryResult boxBoxDistance(const ReferenceGeometry& a, const ReferenceGe
 
   const Vec3 point_a = a.closestPoint(b.center - normal * b.boundingRadius());
   const Vec3 point_b = b.closestPoint(a.center + normal * a.boundingRadius());
-  return {distance <= 0.0, distance, normal, point_a, point_b, "fallback-analytic"};
+  return {distance <= 0.0, distance, normal, point_a, point_b, std::move(backend_name)};
+}
+
+DistanceQueryResult analyticDistance(const ReferenceGeometry& a,
+                                     const ReferenceGeometry& b,
+                                     std::string backend_name) {
+  if (a.type == ShapeType::Sphere && b.type == ShapeType::Sphere) {
+    return sphereSphereDistance(a, b, std::move(backend_name));
+  }
+  if (a.type == ShapeType::Sphere && b.type == ShapeType::Box) {
+    return sphereBoxDistance(a, b, std::move(backend_name));
+  }
+  if (a.type == ShapeType::Box && b.type == ShapeType::Sphere) {
+    auto result = sphereBoxDistance(b, a, std::move(backend_name));
+    std::swap(result.closest_point_a, result.closest_point_b);
+    result.normal = -result.normal;
+    return result;
+  }
+  if (a.type == ShapeType::Box && b.type == ShapeType::Box) {
+    return boxBoxDistance(a, b, std::move(backend_name));
+  }
+  return makeGenericResult(a, b, std::move(backend_name));
 }
 
 }  // namespace
@@ -249,54 +278,71 @@ double ReferenceGeometry::boundingRadius() const {
   return norm(half_extents);
 }
 
-std::string AnalyticReferenceGeometryQueryEngine::name() const { return "fallback-analytic"; }
+std::string AnalyticReferenceBackend::name() const { return "analytic"; }
 
-DistanceQueryResult AnalyticReferenceGeometryQueryEngine::distance(const ReferenceGeometry& a,
-                                                                  const ReferenceGeometry& b) const {
-  if (a.type == ShapeType::Sphere && b.type == ShapeType::Sphere) {
-    return sphereSphereDistance(a, b);
-  }
-  if (a.type == ShapeType::Sphere && b.type == ShapeType::Box) {
-    return sphereBoxDistance(a, b);
-  }
-  if (a.type == ShapeType::Box && b.type == ShapeType::Sphere) {
-    auto result = sphereBoxDistance(b, a);
-    std::swap(result.closest_point_a, result.closest_point_b);
-    result.normal = -result.normal;
-    return result;
-  }
-  if (a.type == ShapeType::Box && b.type == ShapeType::Box) {
-    return boxBoxDistance(a, b);
-  }
-  return makeGenericResult(a, b);
+DistanceQueryResult AnalyticReferenceBackend::distance(const ReferenceGeometry& a,
+                                                       const ReferenceGeometry& b) const {
+  return analyticDistance(a, b, "analytic-fallback");
 }
 
-std::string OptionalHppFclReferenceGeometryQueryEngine::name() const {
-  if constexpr (BASELINE_HAS_HPP_FCL != 0) {
-    return "hpp-fcl-adapter-skeleton";
+bool HppFclReferenceBackend::realBackendAvailable() { return BASELINE_REAL_HPP_FCL_AVAILABLE != 0; }
+
+std::string HppFclReferenceBackend::availabilitySummary() {
+  if (realBackendAvailable()) {
+    return "hpp-fcl dependency detected; adapter skeleton is available and currently delegates to analytic reference geometry.";
   }
-  if constexpr (BASELINE_HAS_FCL != 0) {
-    return "fcl-adapter-skeleton";
-  }
-  return fallback_.name();
+  return "hpp-fcl dependency not detected; backend remains a compile-time skeleton only.";
 }
 
-DistanceQueryResult OptionalHppFclReferenceGeometryQueryEngine::distance(const ReferenceGeometry& a,
-                                                                         const ReferenceGeometry& b) const {
-  auto result = fallback_.distance(a, b);
-  result.backend_name = name();
-  return result;
+std::string HppFclReferenceBackend::name() const {
+  return realBackendAvailable() ? "hppfcl-adapter-skeleton" : "hppfcl-unavailable-skeleton";
 }
 
-bool OptionalHppFclReferenceGeometryQueryEngine::available() const {
-  return (BASELINE_HAS_HPP_FCL != 0) || (BASELINE_HAS_FCL != 0);
+bool HppFclReferenceBackend::available() const { return realBackendAvailable(); }
+
+DistanceQueryResult HppFclReferenceBackend::distance(const ReferenceGeometry& a,
+                                                     const ReferenceGeometry& b) const {
+  return analyticDistance(a, b, name());
+}
+
+bool FclReferenceBackend::realBackendAvailable() { return BASELINE_REAL_FCL_AVAILABLE != 0; }
+
+std::string FclReferenceBackend::availabilitySummary() {
+  if (realBackendAvailable()) {
+    return "FCL dependency detected; adapter skeleton is available and currently delegates to analytic reference geometry.";
+  }
+  return "FCL dependency not detected; backend remains a compile-time skeleton only.";
+}
+
+std::string FclReferenceBackend::name() const {
+  return realBackendAvailable() ? "fcl-adapter-skeleton" : "fcl-unavailable-skeleton";
+}
+
+bool FclReferenceBackend::available() const { return realBackendAvailable(); }
+
+DistanceQueryResult FclReferenceBackend::distance(const ReferenceGeometry& a, const ReferenceGeometry& b) const {
+  return analyticDistance(a, b, name());
 }
 
 std::unique_ptr<ReferenceGeometryQueryEngine> makeDefaultReferenceGeometryQueryEngine() {
-  if constexpr ((BASELINE_HAS_HPP_FCL != 0) || (BASELINE_HAS_FCL != 0)) {
-    return std::make_unique<OptionalHppFclReferenceGeometryQueryEngine>();
+  if constexpr ((BASELINE_FORCE_FALLBACK_REFERENCE == 0) && (BASELINE_REAL_HPP_FCL_AVAILABLE != 0)) {
+    return std::make_unique<HppFclReferenceBackend>();
   }
-  return std::make_unique<AnalyticReferenceGeometryQueryEngine>();
+  if constexpr ((BASELINE_FORCE_FALLBACK_REFERENCE == 0) && (BASELINE_REAL_FCL_AVAILABLE != 0)) {
+    return std::make_unique<FclReferenceBackend>();
+  }
+  return std::make_unique<AnalyticReferenceBackend>();
+}
+
+std::unique_ptr<ReferenceGeometryQueryEngine> makeReferenceGeometryQueryEngine(std::string_view backend_name) {
+  const std::string token(backend_name);
+  if (token == "hppfcl") {
+    return std::make_unique<HppFclReferenceBackend>();
+  }
+  if (token == "fcl") {
+    return std::make_unique<FclReferenceBackend>();
+  }
+  return std::make_unique<AnalyticReferenceBackend>();
 }
 
 }  // namespace baseline

@@ -57,6 +57,9 @@ def main() -> int:
     parser.add_argument("example", nargs="?", choices=sorted(EXAMPLES))
     parser.add_argument("--build-dir", type=Path, default=None, help="Directory containing built executables.")
     parser.add_argument("--config", default="Release", help="Build config for multi-config generators.")
+    parser.add_argument("--sdf-backend", choices=["analytic", "openvdb", "nanovdb"], default=None)
+    parser.add_argument("--reference-backend", choices=["analytic", "hppfcl", "fcl"], default=None)
+    parser.add_argument("--solver-backend", choices=["simple", "siconos"], default=None)
     parser.add_argument("--list", action="store_true", help="List known examples and exit.")
     args = parser.parse_args()
 
@@ -70,7 +73,14 @@ def main() -> int:
     env = os.environ.copy()
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("BASELINE_OUTPUT_ROOT", str(project_root() / "outputs"))
-    completed = subprocess.run([str(executable)], cwd=project_root(), env=env, check=False)
+    command = [str(executable)]
+    if args.sdf_backend:
+        command.extend(["--sdf-backend", args.sdf_backend])
+    if args.reference_backend:
+        command.extend(["--reference-backend", args.reference_backend])
+    if args.solver_backend:
+        command.extend(["--solver-backend", args.solver_backend])
+    completed = subprocess.run(command, cwd=project_root(), env=env, check=False)
     return completed.returncode
 
 

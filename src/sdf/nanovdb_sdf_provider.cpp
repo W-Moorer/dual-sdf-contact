@@ -2,13 +2,22 @@
 
 namespace baseline {
 
+bool NanoVdbSdfProvider::realBackendAvailable() { return BASELINE_REAL_NANOVDB_AVAILABLE != 0; }
+
+std::string NanoVdbSdfProvider::availabilitySummary() {
+  if (realBackendAvailable()) {
+    return "NanoVDB dependency detected; adapter skeleton is available and currently delegates to analytic sampling.";
+  }
+  return "NanoVDB dependency not detected; this provider remains a compile-time skeleton only.";
+}
+
 NanoVdbSdfProvider::NanoVdbSdfProvider(std::string provider_name,
                                        ReferenceGeometry geometry,
                                        double voxel_size,
                                        double narrow_band)
     : AnalyticNarrowBandSdfProvider(
           std::move(provider_name),
-          BASELINE_HAS_NANOVDB ? "nanovdb-adapter-skeleton" : "mock-nanovdb-analytic",
+          realBackendAvailable() ? "nanovdb-adapter-skeleton" : "nanovdb-unavailable-skeleton",
           std::move(geometry),
           voxel_size,
           narrow_band) {}

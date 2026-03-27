@@ -34,7 +34,18 @@ def _has_any_build() -> bool:
 @pytest.mark.parametrize("example", ["ex01_nanovdb_hello", "ex04_single_step_contact"])
 def test_python_runner_smoke(example: str) -> None:
     subprocess.run(
-        [sys.executable, "-m", "baseline.run_example", example],
+        [
+            sys.executable,
+            "-m",
+            "baseline.run_example",
+            example,
+            "--sdf-backend",
+            "analytic",
+            "--reference-backend",
+            "analytic",
+            "--solver-backend",
+            "simple",
+        ],
         cwd=ROOT,
         env=_module_env(),
         check=True,

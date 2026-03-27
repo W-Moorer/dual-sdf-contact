@@ -1,36 +1,68 @@
 # dual-sdf-contact
 
-Minimal but extensible baseline platform for 3D multi-body nonsmooth frictional contact dynamics experiments, aimed at papers built around bidirectional narrow-band SDFs plus CCP-style contact solves.
+Minimal but extensible baseline platform for 3D nonsmooth frictional contact dynamics experiments.
 
-This repository is intentionally a baseline platform, not a full paper system.
-The first version prioritizes:
+This repository now follows an explicit dual-track strategy:
 
-- C++ core code that compiles and runs from a blank repository.
-- Python entrypoints that simply call built C++ executables.
-- Clear module boundaries so OpenVDB / NanoVDB / hpp-fcl / Siconos can be swapped in later.
-- Stable examples and regression outputs under `outputs/`.
-- WSL-first workflow, with Windows-native support as a practical fallback.
+- Windows native = baseline / fallback first
+- WSL2 Ubuntu = real backend integration later
 
-## What Is Implemented
+Current intent:
 
-Current C++ modules:
+- Windows native is the recommended environment for skeleton development, fallback examples, interface validation, and solver prototyping.
+- Future WSL2 Ubuntu 22.04 / 24.04 is the recommended environment for OpenVDB / NanoVDB / hpp-fcl / optional Siconos integration and paper-grade experiments.
 
-- `SdfProvider` interface.
-- `OpenVdbSdfProvider` adapter skeleton.
-- `NanoVdbSdfProvider` adapter skeleton.
-- `CandidatePairManager`.
-- `DualSdfContactCalculator`.
-- `ContactProblemBuilder`.
-- `ContactSolver` interface.
-- `SimpleCcpSolver`.
-- `OptionalSiconosSolver` adapter hook.
+This is a baseline platform, not the final paper system.
 
-Current runtime behavior:
+## Current Verified Status
 
-- If OpenVDB / NanoVDB are not detected, the SDF providers still run through an analytic narrow-band fallback that mimics a minimal level-set query path.
-- If hpp-fcl / FCL are not detected, reference distance queries fall back to deterministic analytic geometry.
-- If Siconos is not detected, the optional backend is reported as unavailable.
-- If Siconos is detected in the future, the adapter hook is already present, but the current baseline still routes through the local solver and emits a note saying so. The real fc3d integration is a next-step replacement point.
+Current host:
+
+- Windows native
+- no WSL available on this machine
+
+Current default backend combination:
+
+- SDF backend: `analytic`
+- reference backend: `analytic`
+- solver backend: `simple`
+
+Those defaults are enforced on Windows by:
+
+- `BASELINE_FORCE_FALLBACK_SDF=ON`
+- `BASELINE_FORCE_FALLBACK_REFERENCE=ON`
+- `BASELINE_FORCE_SIMPLE_SOLVER=ON`
+
+## What Exists
+
+Core modules:
+
+- `SdfProvider`
+- `OpenVdbSdfProvider`
+- `NanoVdbSdfProvider`
+- `CandidatePairManager`
+- `DualSdfContactCalculator`
+- `ContactProblemBuilder`
+- `ContactSolver`
+- `SimpleCcpSolver`
+- `OptionalSiconosSolver`
+- runtime backend factory / registry
+
+Real-backend skeletons are already present in code:
+
+- [openvdb_sdf_provider.h](E:/workspace/dual-sdf-contact/include/baseline/sdf/openvdb_sdf_provider.h)
+- [nanovdb_sdf_provider.h](E:/workspace/dual-sdf-contact/include/baseline/sdf/nanovdb_sdf_provider.h)
+- [reference_geometry.h](E:/workspace/dual-sdf-contact/include/baseline/contact/reference_geometry.h)
+- [siconos_solver.h](E:/workspace/dual-sdf-contact/include/baseline/solver/siconos_solver.h)
+- [backend_factory.h](E:/workspace/dual-sdf-contact/include/baseline/runtime/backend_factory.h)
+
+Current semantics:
+
+- `analytic` is the stable fallback execution path.
+- `openvdb`, `nanovdb`, `hppfcl`, `fcl`, and `siconos` now have stable API skeletons and factory entries.
+- If those backends are explicitly requested while unavailable, the executable returns a clear error.
+- If those dependencies are detected in the future, the same factory and example entrypoints can select them without rewriting example bodies.
+- Today, the non-fallback adapters still report honestly that they delegate to fallback execution until the real library calls are wired in.
 
 ## Architecture
 
@@ -39,7 +71,7 @@ parameterized geometry
     |
     +--> ReferenceGeometry -----------------------------+
     |                                                   |
-    +--> SdfProvider (OpenVDB / NanoVDB / fallback)     |
+    +--> SdfProvider / backend factory                  |
                                                         v
                                              CandidatePairManager
                                                         |
@@ -50,7 +82,7 @@ parameterized geometry
                                            ContactProblemBuilder
                                                         |
                                                         v
-                              ContactSolver interface / solver backends
+                                ContactSolver / backend factory layer
                                    |                     |
                                    |                     +--> OptionalSiconosSolver
                                    |
@@ -60,107 +92,120 @@ parameterized geometry
                                            CSV / JSON / Markdown outputs
 ```
 
-The important separations are:
-
-- candidate-pair management vs precise contact geometry,
-- contact geometry construction vs contact solve,
-- SDF-based contact queries vs reference geometry queries,
-- optional heavy dependencies vs the always-runnable fallback path.
-
 ## Repository Layout
 
 ```text
 .
-├── CMakeLists.txt
-├── CMakePresets.json
-├── cmake/
-├── third_party/
-├── include/
-│   └── baseline/
-├── src/
-│   ├── core/
-│   ├── sdf/
-│   ├── contact/
-│   ├── solver/
-│   └── apps/
-├── python/
-│   └── baseline/
-├── examples/
-├── tests/
-├── data/
-├── outputs/
-└── scripts/
+|-- CMakeLists.txt
+|-- CMakePresets.json
+|-- cmake/
+|-- docs/
+|-- third_party/
+|-- include/
+|   `-- baseline/
+|-- src/
+|   |-- core/
+|   |-- runtime/
+|   |-- sdf/
+|   |-- contact/
+|   |-- solver/
+|   `-- apps/
+|-- python/
+|   `-- baseline/
+|-- tests/
+|-- outputs/
+`-- scripts/
+```
+
+## Backend Factory
+
+Runtime backend selection lives in:
+
+- [backend_factory.cpp](E:/workspace/dual-sdf-contact/src/runtime/backend_factory.cpp)
+
+Supported names:
+
+- SDF: `analytic`, `openvdb`, `nanovdb`
+- reference: `analytic`, `hppfcl`, `fcl`
+- solver: `simple`, `siconos`
+
+Examples and the Python runner now go through this layer instead of hard-coding implementation class names.
+
+## CMake Options
+
+Backend-related options:
+
+- `BASELINE_WITH_OPENVDB`
+- `BASELINE_WITH_NANOVDB`
+- `BASELINE_WITH_HPP_FCL`
+- `BASELINE_WITH_FCL`
+- `BASELINE_WITH_SICONOS`
+- `BASELINE_FORCE_FALLBACK_SDF`
+- `BASELINE_FORCE_FALLBACK_REFERENCE`
+- `BASELINE_FORCE_SIMPLE_SOLVER`
+
+Configure-time output prints:
+
+- dependency detection summary
+- selected default SDF / reference / solver backends
+- force-fallback flags
+- currently available real backends
+
+On the current Windows host the summary is effectively:
+
+```text
+SDF backend: analytic
+reference backend: analytic
+solver backend: simple
+real backends available: none
 ```
 
 ## Dependency Strategy
 
-The project is designed so the baseline still compiles with only a C++17 compiler, CMake, and Python.
-Heavy libraries are optional and isolated behind small interfaces.
+### Windows Native
 
-### WSL / Ubuntu 22.04 or 24.04
+Recommended for:
 
-Preferred order:
+- fallback baseline development
+- interface stabilization
+- examples and tests
+- solver prototyping
 
-1. `apt` for `build-essential`, `cmake`, `ninja-build`, `python3`, `pytest`, `libeigen3-dev`.
-2. `apt` for optional `libopenvdb-dev`, `libfcl-dev`, `libhpp-fcl-dev`, `libtbb-dev` when available.
-3. Keep Siconos optional and off by default.
+Preferred toolchain:
 
-Notes:
+- Visual Studio 2022
+- MSVC
+- CMake
+- optional Ninja
+- optional vcpkg
 
-- `scripts/bootstrap_wsl.sh` installs the common packages and opportunistically installs optional ones if they exist in the active apt sources.
-- For WSL builds, keep the build tree inside the Linux filesystem when possible.
-- Avoid high-frequency builds under `/mnt/c/...`; it is noticeably slower than building under `~/...` or another native WSL path.
+The project does not require OpenVDB / NanoVDB / hpp-fcl / FCL / Siconos to exist on Windows.
 
-### Windows 11 Native
+### Future WSL2 Ubuntu 22.04 / 24.04
 
-Preferred order:
+Recommended later for:
 
-1. MSVC + CMake.
-2. Ninja + vcpkg if available.
-3. If Ninja / vcpkg are not ready yet, the project still configures with the Visual Studio generator and zero heavy dependencies.
+- OpenVDB / NanoVDB integration
+- hpp-fcl / FCL integration
+- optional Siconos integration
+- formal experiment runs
 
-Notes:
+Recommended install order later:
 
-- `scripts/bootstrap_windows.ps1` clones `vcpkg` into `third_party/vcpkg` and installs `eigen3` by default.
-- Optional Windows packages are currently requested through classic `vcpkg install ...` in the script, not manifest mode. This is intentional: the heavy dependency mix is still host-dependent, and the baseline should not hard-fail on one missing optional port.
-- The default Windows configure script uses `Visual Studio 17 2022` because it is the most robust fresh-host choice. If you already have Ninja and a developer shell, pass `-Generator Ninja`.
+1. `Eigen`
+2. `OpenVDB / NanoVDB`
+3. `hpp-fcl / FCL`
+4. optional `Siconos`
 
-### Optional Dependency Detection
+Important WSL note:
 
-Configure-time detection is reported by CMake for:
-
-- `Eigen3`
-- `OpenVDB`
-- `NanoVDB`
-- `hpp-fcl`
-- `FCL`
-- `Siconos`
-
-The baseline does not block on any of them.
+- keep build directories inside the Linux filesystem instead of `/mnt/c` when compile speed matters.
 
 ## Build And Run
 
-### Recommended WSL Flow
+### Windows Native
 
-```bash
-bash scripts/bootstrap_wsl.sh
-bash scripts/configure_wsl.sh wsl-release
-bash scripts/build_wsl.sh wsl-release
-bash scripts/run_all_examples_wsl.sh
-```
-
-Manual WSL flow:
-
-```bash
-cmake --preset wsl-release
-cmake --build --preset wsl-release
-ctest --test-dir build/wsl-release --output-on-failure
-PYTHONPATH=python python3 -m baseline.run_example ex01_nanovdb_hello
-```
-
-### Windows Native Flow
-
-PowerShell scripts:
+Recommended script flow:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/configure_windows.ps1 -Config Release
@@ -168,7 +213,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1 -Config Relea
 powershell -ExecutionPolicy Bypass -File scripts/run_all_examples_windows.ps1 -Config Release
 ```
 
-If you also want `vcpkg` bootstrapped first:
+Optional vcpkg bootstrap:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/bootstrap_windows.ps1
@@ -184,20 +229,44 @@ $env:PYTHONPATH = "$PWD\python"
 python -m baseline.run_example ex01_nanovdb_hello
 ```
 
-### CMake Presets
+### Future WSL Flow
 
-Provided configure presets:
+These scripts are included now for future WSL devices.
+They were not executed on the current Windows-only machine.
 
-- `wsl-debug`
-- `wsl-release`
+```bash
+bash scripts/bootstrap_wsl.sh
+bash scripts/configure_wsl.sh wsl-release
+bash scripts/build_wsl.sh wsl-release
+bash scripts/run_all_examples_wsl.sh
+```
+
+Manual WSL flow later:
+
+```bash
+cmake --preset wsl-release
+cmake --build --preset wsl-release
+ctest --test-dir build/wsl-release --output-on-failure
+PYTHONPATH=python python3 -m baseline.run_example ex01_nanovdb_hello
+```
+
+## CMake Presets
+
+Provided presets:
+
 - `windows-debug`
 - `windows-release`
+- `wsl-debug`
+- `wsl-release`
 
-Provided build presets use the same names.
+Policy encoded in presets:
 
-## Python Entry Points
+- Windows presets force the fallback baseline path.
+- WSL presets disable the force-fallback knobs so future real backend work can be enabled through configuration instead of example rewrites.
 
-Examples are exposed through:
+## Python Entry Point
+
+Examples are launched through built C++ executables:
 
 ```bash
 python -m baseline.run_example ex01_nanovdb_hello
@@ -208,46 +277,30 @@ python -m baseline.run_example ex05_compare_backends
 python -m baseline.run_example ex06_regression_smoke
 ```
 
-The Python layer does not require `pybind11`.
-It simply resolves the built executable and launches it through `subprocess`.
+Backend flags are supported:
+
+```bash
+python -m baseline.run_example ex03_dual_sdf_gap --sdf-backend analytic
+python -m baseline.run_example ex02_hppfcl_distance --reference-backend analytic
+python -m baseline.run_example ex04_single_step_contact --solver-backend simple
+```
+
+Flags:
+
+- `--sdf-backend analytic|openvdb|nanovdb`
+- `--reference-backend analytic|hppfcl|fcl`
+- `--solver-backend simple|siconos`
+
+Default behavior on the current Windows host remains the stable fallback combination.
 
 ## Examples
 
-### `ex01_nanovdb_hello`
-
-- Builds a simple sphere level set through `NanoVdbSdfProvider`.
-- Samples SDF values and gradients at a few points.
-- Writes `outputs/ex01_nanovdb_hello/samples.csv` and `summary.json`.
-
-### `ex02_hppfcl_distance`
-
-- Runs a reference geometry distance / collision query for sphere-box cases.
-- Uses the hpp-fcl / FCL adapter layer when detected, otherwise analytic fallback.
-- Writes `outputs/ex02_hppfcl_distance/distance_cases.csv` and `summary.json`.
-
-### `ex03_dual_sdf_gap`
-
-- Builds two simple SDF objects.
-- Computes symmetric signed gap, contact normal, tangential basis, and support points.
-- Writes `outputs/ex03_dual_sdf_gap/contact.csv` and `contact.json`.
-
-### `ex04_single_step_contact`
-
-- Builds a sphere-plane single-step contact problem.
-- Solves it with `SimpleCcpSolver`.
-- Reports the optional Siconos backend state.
-- Writes `outputs/ex04_single_step_contact/solver_results.csv` and `summary.json`.
-
-### `ex05_compare_backends`
-
-- Compares reference geometry distance vs dual-SDF gap.
-- Compares `SimpleCcpSolver` vs `OptionalSiconosSolver`.
-- Writes `outputs/ex05_compare_backends/summary.csv` and `report.md`.
-
-### `ex06_regression_smoke`
-
-- Runs a tiny end-to-end smoke executable.
-- Writes `outputs/ex06_regression_smoke/smoke.txt`.
+- `ex01_nanovdb_hello`: reports selected SDF backend and whether fallback execution is running.
+- `ex02_hppfcl_distance`: reports selected reference backend and fallback status.
+- `ex03_dual_sdf_gap`: reports backend names and a symmetry residual.
+- `ex04_single_step_contact`: reports selected SDF and solver backends while keeping `SimpleCcpSolver` visible as baseline.
+- `ex05_compare_backends`: compares analytic reference, selected reference, dual-SDF result, simple solver, and selected solver backend.
+- `ex06_regression_smoke`: small end-to-end smoke run through the same backend factory layer.
 
 ## Tests
 
@@ -257,22 +310,18 @@ C++ tests:
 - `test_dual_sdf_gap_symmetry`
 - `test_contact_frame_orthogonality`
 - `test_simple_ccp_solver_smoke`
+- `test_backend_factory_defaults`
+- `test_unavailable_backend_handling`
+- `test_example_reports_backend_name`
 - `test_siconos_backend_smoke` when Siconos is detected
 
-Python smoke tests:
+Python smoke:
 
 - `tests/test_python_smoke.py`
 
-Run them with:
-
-```bash
-ctest --output-on-failure
-python -m pytest tests/test_python_smoke.py
-```
-
 ## Outputs
 
-All baseline outputs are written under:
+Outputs are written under:
 
 - `outputs/ex01_nanovdb_hello/`
 - `outputs/ex02_hppfcl_distance/`
@@ -281,55 +330,8 @@ All baseline outputs are written under:
 - `outputs/ex05_compare_backends/`
 - `outputs/ex06_regression_smoke/`
 
-You can override the root output directory with the `BASELINE_OUTPUT_ROOT` environment variable.
+`BASELINE_OUTPUT_ROOT` can override the output root.
 
-## Switching Backends
+## Migration
 
-### Simple Solver vs Optional Siconos
-
-- `SimpleCcpSolver` is always available.
-- `OptionalSiconosSolver` is controlled by `WITH_SICONOS`.
-- Configure with `-DWITH_SICONOS=ON` if you want CMake to probe for Siconos.
-- In the current baseline, the Siconos adapter is a stable interface hook plus reporting path. The actual fc3d backend call is intentionally left as a future replacement point.
-
-### hpp-fcl vs FCL vs Analytic Fallback
-
-- The reference geometry query layer tries to detect `hpp-fcl`.
-- If `hpp-fcl` is not found, it can still detect plain `FCL`.
-- If neither is found, the project falls back to deterministic analytic distance queries for the simple baseline shapes.
-- This keeps `ex02` and `ex05` runnable even on a bare Windows machine.
-
-### OpenVDB / NanoVDB vs Fallback SDF
-
-- `OpenVdbSdfProvider` and `NanoVdbSdfProvider` already exist as named adapter classes.
-- If the actual libraries are not detected, both classes still expose the same interface but run through an analytic narrow-band fallback.
-- This means downstream contact code can be developed now and upgraded later without changing the example entrypoints.
-
-## Replacing The Baseline SDF With Your Own Code
-
-The most direct replacement path is:
-
-1. Keep the `SdfProvider` interface unchanged.
-2. Replace the internals of `OpenVdbSdfProvider` and/or `NanoVdbSdfProvider` so `sample()` and `referencePoint()` come from your real grid objects.
-3. Leave `DualSdfContactCalculator`, `ContactProblemBuilder`, and the examples intact while validating the new backend.
-
-If your own OpenVDB pipeline already has a richer object model, keep a thin adapter layer in `src/sdf/` rather than pushing OpenVDB-specific details into `src/contact/`.
-
-## Current Limitations
-
-- Fallback reference geometry is axis-aligned and intentionally simple.
-- The narrow-band SDF providers are analytic stand-ins unless external libraries are detected and you replace the adapter internals.
-- The solver layer is single-contact and baseline-oriented, not a full NSGS / APGD / fc3d production implementation.
-- No GPU path is included in the first version.
-- macOS is not a priority target.
-
-## Baseline Status
-
-This repository is meant to be the experimental floor, not the final paper codebase.
-
-Today it gives you:
-
-- a clean compile/run loop,
-- reproducible examples,
-- a stable reporting format,
-- a place to plug in your own SDF and CCP implementations next.
+See [migrate_to_wsl.md](E:/workspace/dual-sdf-contact/docs/migrate_to_wsl.md) for the concrete migration checklist for the future WSL2 Ubuntu device.

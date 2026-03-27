@@ -19,7 +19,10 @@
       "inherits": "base",
       "generator": "Ninja",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BASELINE_FORCE_FALLBACK_SDF": "OFF",
+        "BASELINE_FORCE_FALLBACK_REFERENCE": "OFF",
+        "BASELINE_FORCE_SIMPLE_SOLVER": "OFF"
       }
     },
     {
@@ -27,20 +30,33 @@
       "inherits": "base",
       "generator": "Ninja",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "BASELINE_FORCE_FALLBACK_SDF": "OFF",
+        "BASELINE_FORCE_FALLBACK_REFERENCE": "OFF",
+        "BASELINE_FORCE_SIMPLE_SOLVER": "OFF"
       }
     },
     {
       "name": "windows-debug",
       "inherits": "base",
       "generator": "Visual Studio 17 2022",
-      "architecture": "x64"
+      "architecture": "x64",
+      "cacheVariables": {
+        "BASELINE_FORCE_FALLBACK_SDF": "ON",
+        "BASELINE_FORCE_FALLBACK_REFERENCE": "ON",
+        "BASELINE_FORCE_SIMPLE_SOLVER": "ON"
+      }
     },
     {
       "name": "windows-release",
       "inherits": "base",
       "generator": "Visual Studio 17 2022",
-      "architecture": "x64"
+      "architecture": "x64",
+      "cacheVariables": {
+        "BASELINE_FORCE_FALLBACK_SDF": "ON",
+        "BASELINE_FORCE_FALLBACK_REFERENCE": "ON",
+        "BASELINE_FORCE_SIMPLE_SOLVER": "ON"
+      }
     }
   ],
   "buildPresets": [

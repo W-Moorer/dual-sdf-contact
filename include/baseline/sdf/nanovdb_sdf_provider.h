@@ -8,6 +8,9 @@ class NanoVdbSdfProvider final : public AnalyticNarrowBandSdfProvider {
  public:
   NanoVdbSdfProvider(std::string provider_name, ReferenceGeometry geometry, double voxel_size, double narrow_band);
 
+  static bool realBackendAvailable();
+  static std::string availabilitySummary();
+
   static NanoVdbSdfProvider makeSphere(std::string provider_name,
                                        const Vec3& center,
                                        double radius,

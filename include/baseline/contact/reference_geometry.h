@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "baseline/core/math.h"
 #include "baseline/core/build_config.h"
@@ -41,25 +42,44 @@ class ReferenceGeometryQueryEngine {
  public:
   virtual ~ReferenceGeometryQueryEngine() = default;
   virtual std::string name() const = 0;
+  virtual bool available() const { return true; }
   virtual DistanceQueryResult distance(const ReferenceGeometry& a, const ReferenceGeometry& b) const = 0;
 };
 
-class AnalyticReferenceGeometryQueryEngine final : public ReferenceGeometryQueryEngine {
+class AnalyticReferenceBackend final : public ReferenceGeometryQueryEngine {
  public:
   std::string name() const override;
   DistanceQueryResult distance(const ReferenceGeometry& a, const ReferenceGeometry& b) const override;
 };
 
-class OptionalHppFclReferenceGeometryQueryEngine final : public ReferenceGeometryQueryEngine {
+class HppFclReferenceBackend final : public ReferenceGeometryQueryEngine {
  public:
   std::string name() const override;
+  bool available() const override;
   DistanceQueryResult distance(const ReferenceGeometry& a, const ReferenceGeometry& b) const override;
-  bool available() const;
+  static bool realBackendAvailable();
+  static std::string availabilitySummary();
 
  private:
-  AnalyticReferenceGeometryQueryEngine fallback_;
+  AnalyticReferenceBackend fallback_;
 };
 
+class FclReferenceBackend final : public ReferenceGeometryQueryEngine {
+ public:
+  std::string name() const override;
+  bool available() const override;
+  DistanceQueryResult distance(const ReferenceGeometry& a, const ReferenceGeometry& b) const override;
+  static bool realBackendAvailable();
+  static std::string availabilitySummary();
+
+ private:
+  AnalyticReferenceBackend fallback_;
+};
+
+using AnalyticReferenceGeometryQueryEngine = AnalyticReferenceBackend;
+using OptionalHppFclReferenceGeometryQueryEngine = HppFclReferenceBackend;
+
 std::unique_ptr<ReferenceGeometryQueryEngine> makeDefaultReferenceGeometryQueryEngine();
+std::unique_ptr<ReferenceGeometryQueryEngine> makeReferenceGeometryQueryEngine(std::string_view backend_name);
 
 }  // namespace baseline

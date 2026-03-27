@@ -6,7 +6,16 @@ OptionalSiconosSolver::OptionalSiconosSolver() = default;
 
 std::string OptionalSiconosSolver::name() const { return "optional-siconos"; }
 
-bool OptionalSiconosSolver::available() const { return BASELINE_HAS_SICONOS; }
+bool OptionalSiconosSolver::realBackendAvailable() { return BASELINE_REAL_SICONOS_AVAILABLE != 0; }
+
+std::string OptionalSiconosSolver::availabilitySummary() {
+  if (realBackendAvailable()) {
+    return "Siconos dependency detected; adapter skeleton is available and currently delegates to SimpleCcpSolver.";
+  }
+  return "Siconos dependency not detected; OptionalSiconosSolver remains a compile-time skeleton only.";
+}
+
+bool OptionalSiconosSolver::available() const { return realBackendAvailable(); }
 
 SolverResult OptionalSiconosSolver::solve(const ContactProblem& problem) const {
   SolverResult result = fallback_.solve(problem);
