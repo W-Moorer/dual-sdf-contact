@@ -85,10 +85,12 @@ def test_plot_ready_csv_generated(tmp_path: Path) -> None:
     plot_gap = suite_root / "plot_gap_vs_resolution.csv"
     plot_runtime = suite_root / "plot_runtime_vs_resolution.csv"
     plot_symmetry = suite_root / "plot_symmetry_vs_bandwidth.csv"
+    plot_normal_orientation = suite_root / "plot_normal_vs_orientation.csv"
 
     assert plot_gap.exists()
     assert plot_runtime.exists()
     assert plot_symmetry.exists()
+    assert plot_normal_orientation.exists()
     assert "voxel_size" in plot_gap.read_text(encoding="utf-8")
     assert "runtime_total_us_mean" in plot_runtime.read_text(encoding="utf-8")
 

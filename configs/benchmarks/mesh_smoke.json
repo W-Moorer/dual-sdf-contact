@@ -21,6 +21,7 @@
         "center": [0.0, 0.0, 0.0],
         "rotation_rpy_deg": [0.0, 0.0, 0.0],
         "mesh_path": "../../data/meshes/unit_octahedron.obj",
+        "mesh_category": "convex",
         "mesh_scale": 0.62,
         "mesh_recenter": true,
         "mesh_normalize": false
@@ -41,6 +42,7 @@
         "center": [0.0, 0.0, 0.0],
         "rotation_rpy_deg": [0.0, 0.0, 20.0],
         "mesh_path": "../../data/meshes/unit_cube.obj",
+        "mesh_category": "convex",
         "mesh_scale": 0.95,
         "mesh_recenter": true,
         "mesh_normalize": false
@@ -51,6 +53,28 @@
         "center": [1.45, 0.10, 0.0],
         "half_extents": [0.38, 0.34, 0.28],
         "rotation_rpy_deg": [0.0, 0.0, -15.0]
+      }
+    },
+    {
+      "name": "concave_mesh_box_sep",
+      "gap_axis": [1.0, 0.0, 0.0],
+      "a": {
+        "name": "concave_mesh_a",
+        "type": "mesh",
+        "center": [0.0, 0.0, 0.0],
+        "rotation_rpy_deg": [0.0, 0.0, 10.0],
+        "mesh_path": "../../data/meshes/concave_l_block.obj",
+        "mesh_category": "nonconvex",
+        "mesh_scale": 0.52,
+        "mesh_recenter": true,
+        "mesh_normalize": false
+      },
+      "b": {
+        "name": "box_b",
+        "type": "box",
+        "center": [1.55, 0.04, 0.0],
+        "half_extents": [0.40, 0.36, 0.28],
+        "rotation_rpy_deg": [0.0, 0.0, -12.0]
       }
     }
   ]

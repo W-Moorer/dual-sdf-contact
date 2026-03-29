@@ -1,0 +1,59 @@
+{
+  "benchmark_name": "mesh_nonconvex_smoke",
+  "case_family": "mesh",
+  "sweep_family": "primitive",
+  "description": "Nonconvex mesh smoke matrix for paper-stage validation.",
+  "sdf_backends": ["analytic", "openvdb"],
+  "reference_backends": ["analytic", "fcl"],
+  "solver_backends": ["simple"],
+  "voxel_sizes": [0.08],
+  "narrow_band_half_widths": [4.0],
+  "runtime_iterations": 12,
+  "enable_solver_probe": true,
+  "seed": 41,
+  "primitive_cases": [
+    {
+      "name": "concave_mesh_sphere_sep",
+      "gap_axis": [1.0, 0.0, 0.0],
+      "a": {
+        "name": "concave_mesh_a",
+        "type": "mesh",
+        "center": [0.0, 0.0, 0.0],
+        "rotation_rpy_deg": [0.0, 0.0, 12.0],
+        "mesh_path": "../../data/meshes/concave_l_block.obj",
+        "mesh_category": "nonconvex",
+        "mesh_scale": 0.50,
+        "mesh_recenter": true,
+        "mesh_normalize": false
+      },
+      "b": {
+        "name": "sphere_b",
+        "type": "sphere",
+        "center": [1.46, 0.04, 0.0],
+        "radius": 0.52
+      }
+    },
+    {
+      "name": "concave_mesh_box_sep",
+      "gap_axis": [1.0, 0.0, 0.0],
+      "a": {
+        "name": "concave_mesh_a",
+        "type": "mesh",
+        "center": [0.0, 0.0, 0.0],
+        "rotation_rpy_deg": [0.0, 0.0, 18.0],
+        "mesh_path": "../../data/meshes/concave_l_block.obj",
+        "mesh_category": "nonconvex",
+        "mesh_scale": 0.52,
+        "mesh_recenter": true,
+        "mesh_normalize": false
+      },
+      "b": {
+        "name": "box_b",
+        "type": "box",
+        "center": [1.54, 0.08, 0.0],
+        "half_extents": [0.40, 0.32, 0.28],
+        "rotation_rpy_deg": [0.0, 0.0, -10.0]
+      }
+    }
+  ]
+}

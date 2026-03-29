@@ -1,8 +1,8 @@
 {
-  "benchmark_name": "mesh_gap_sweep",
+  "benchmark_name": "mesh_gap_sweep_2",
   "case_family": "mesh",
   "sweep_family": "gap_sweep",
-  "description": "Gap sweep near narrow-band boundaries for a mesh-box benchmark pair.",
+  "description": "Gap sweep for the second nonconvex U-shaped mesh against a box.",
   "sdf_backends": ["analytic", "openvdb"],
   "reference_backends": ["analytic", "fcl"],
   "solver_backends": ["simple"],
@@ -10,28 +10,28 @@
   "narrow_band_half_widths": [2.0, 4.0, 8.0],
   "runtime_iterations": 12,
   "enable_solver_probe": true,
-  "seed": 29,
+  "seed": 47,
   "gap_values": [-0.04, -0.01, 0.00, 0.01, 0.04],
   "base_case": {
-    "name": "mesh_box_gap_base",
+    "name": "mesh_u_box_gap_base",
     "gap_axis": [1.0, 0.0, 0.0],
     "a": {
-      "name": "mesh_a",
+      "name": "mesh_u_a",
       "type": "mesh",
       "center": [0.0, 0.0, 0.0],
-      "rotation_rpy_deg": [0.0, 0.0, 18.0],
-      "mesh_path": "../../data/meshes/concave_l_block.obj",
+      "rotation_rpy_deg": [0.0, 0.0, 10.0],
+      "mesh_path": "../../data/meshes/concave_u_block.obj",
       "mesh_category": "nonconvex",
-      "mesh_scale": 0.52,
+      "mesh_scale": 0.48,
       "mesh_recenter": true,
       "mesh_normalize": false
     },
     "b": {
       "name": "box_b",
       "type": "box",
-      "center": [1.48, 0.08, 0.0],
-      "half_extents": [0.42, 0.32, 0.30],
-      "rotation_rpy_deg": [0.0, 0.0, -10.0]
+      "center": [1.40, -0.08, 0.0],
+      "half_extents": [0.36, 0.30, 0.26],
+      "rotation_rpy_deg": [0.0, 0.0, 14.0]
     }
   }
 }

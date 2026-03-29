@@ -128,16 +128,22 @@ def _sort_rows(rows: list[dict[str, str]], numeric_keys: list[str], lexical_keys
 def build_accuracy_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     columns = [
         "suite_name",
+        "run_name",
         "benchmark_name",
         "case_family",
+        "case_group",
         "sweep_family",
         "case_name",
         "shape_a",
         "shape_b",
         "mesh_a",
         "mesh_b",
+        "mesh_category",
         "sdf_backend",
         "reference_backend",
+        "reference_mode",
+        "reference_quality",
+        "reference_diagnostic_label",
         "voxel_size",
         "narrow_band_half_width",
         "absolute_gap_error_mean",
@@ -151,11 +157,16 @@ def build_accuracy_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
 def build_efficiency_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     columns = [
         "suite_name",
+        "run_name",
         "benchmark_name",
+        "case_group",
         "case_name",
         "shape_pair",
+        "mesh_category",
         "sdf_backend",
         "reference_backend",
+        "reference_quality",
+        "reference_diagnostic_label",
         "voxel_size",
         "narrow_band_half_width",
         "reference_runtime_us_mean",
@@ -165,6 +176,8 @@ def build_efficiency_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
         "batch_total_runtime_us",
         "invalid_result_count",
         "narrow_band_edge_hit_count",
+        "reference_warning_count",
+        "reference_grazing_count",
     ]
     return _select_columns(_sort_rows(rows, ["runtime_total_us_mean"], ["benchmark_name", "case_name"]), columns)
 
@@ -178,19 +191,29 @@ def build_ablation_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     ]
     columns = [
         "suite_name",
+        "run_name",
         "benchmark_name",
         "case_family",
+        "case_group",
         "sweep_family",
         "case_name",
         "shape_pair",
         "mesh_a",
         "mesh_b",
+        "mesh_category",
+        "reference_quality",
+        "reference_diagnostic_label",
         "voxel_size",
         "narrow_band_half_width",
+        "orientation_angle_deg",
         "absolute_gap_error_mean",
+        "reference_point_distance_consistency_mean",
+        "reference_normal_alignment_residual_mean",
         "runtime_total_us_mean",
         "symmetry_residual_mean",
         "invalid_result_count",
+        "reference_warning_count",
+        "reference_grazing_count",
         "narrow_band_edge_hit_count",
     ]
     return _select_columns(_sort_rows(filtered, ["voxel_size", "narrow_band_half_width"], ["benchmark_name", "case_name"]), columns)
@@ -200,13 +223,18 @@ def build_plot_gap_vs_resolution(rows: list[dict[str, str]]) -> list[dict[str, s
     filtered = [row for row in rows if row.get("benchmark_name") in {"resolution_sweep", "mesh_resolution_sweep"}]
     columns = [
         "suite_name",
+        "run_name",
         "benchmark_name",
         "case_name",
+        "case_group",
         "shape_pair",
         "mesh_a",
         "mesh_b",
+        "mesh_category",
         "sdf_backend",
         "reference_backend",
+        "reference_quality",
+        "reference_diagnostic_label",
         "voxel_size",
         "narrow_band_half_width",
         "absolute_gap_error_mean",
@@ -220,11 +248,16 @@ def build_plot_runtime_vs_resolution(rows: list[dict[str, str]]) -> list[dict[st
     filtered = [row for row in rows if row.get("benchmark_name") in {"resolution_sweep", "mesh_resolution_sweep"}]
     columns = [
         "suite_name",
+        "run_name",
         "benchmark_name",
         "case_name",
+        "case_group",
         "shape_pair",
+        "mesh_category",
         "sdf_backend",
         "reference_backend",
+        "reference_quality",
+        "reference_diagnostic_label",
         "voxel_size",
         "narrow_band_half_width",
         "reference_runtime_us_mean",
@@ -239,23 +272,90 @@ def build_plot_symmetry_vs_bandwidth(rows: list[dict[str, str]]) -> list[dict[st
     filtered = [
         row
         for row in rows
-        if row.get("benchmark_name") in {"gap_sweep", "mesh_gap_sweep", "resolution_sweep", "mesh_resolution_sweep"}
+        if row.get("benchmark_name")
+        in {"gap_sweep", "mesh_gap_sweep", "resolution_sweep", "mesh_resolution_sweep", "mesh_orientation_sweep"}
     ]
     columns = [
         "suite_name",
+        "run_name",
         "benchmark_name",
         "case_name",
+        "case_group",
         "shape_pair",
+        "mesh_category",
         "sdf_backend",
         "reference_backend",
+        "reference_quality",
+        "reference_diagnostic_label",
         "voxel_size",
         "narrow_band_half_width",
+        "orientation_angle_deg",
         "symmetry_residual_mean",
         "invalid_result_count",
+        "reference_warning_count",
+        "reference_grazing_count",
         "narrow_band_edge_hit_count",
         "runtime_total_us_mean",
     ]
     return _select_columns(_sort_rows(filtered, ["narrow_band_half_width", "voxel_size"], ["benchmark_name", "case_name"]), columns)
+
+
+def build_plot_normal_vs_orientation(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    filtered = [row for row in rows if row.get("sweep_family") == "orientation_sweep"]
+    columns = [
+        "suite_name",
+        "run_name",
+        "benchmark_name",
+        "case_group",
+        "case_name",
+        "shape_pair",
+        "mesh_a",
+        "mesh_b",
+        "mesh_category",
+        "sdf_backend",
+        "reference_backend",
+        "reference_quality",
+        "reference_diagnostic_label",
+        "voxel_size",
+        "narrow_band_half_width",
+        "orientation_index",
+        "orientation_angle_deg",
+        "absolute_gap_error_mean",
+        "normal_angle_error_deg_mean",
+        "symmetry_residual_mean",
+        "tangent_orthogonality_residual_mean",
+        "reference_normal_alignment_residual_mean",
+        "reference_warning_count",
+        "reference_grazing_count",
+        "degenerate_normal_count",
+    ]
+    return _select_columns(_sort_rows(filtered, ["orientation_angle_deg"], ["benchmark_name", "case_name"]), columns)
+
+
+def build_plot_runtime_vs_orientation(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    filtered = [row for row in rows if row.get("sweep_family") == "orientation_sweep"]
+    columns = [
+        "suite_name",
+        "run_name",
+        "benchmark_name",
+        "case_group",
+        "case_name",
+        "shape_pair",
+        "mesh_category",
+        "sdf_backend",
+        "reference_backend",
+        "reference_quality",
+        "reference_diagnostic_label",
+        "voxel_size",
+        "narrow_band_half_width",
+        "orientation_index",
+        "orientation_angle_deg",
+        "reference_runtime_us_mean",
+        "dual_sdf_runtime_us_mean",
+        "runtime_total_us_mean",
+        "runtime_total_us_p95",
+    ]
+    return _select_columns(_sort_rows(filtered, ["orientation_angle_deg"], ["benchmark_name", "case_name"]), columns)
 
 
 def export_postprocess_artifacts(rows: list[dict[str, str]], output_dir: Path) -> None:
@@ -269,6 +369,8 @@ def export_postprocess_artifacts(rows: list[dict[str, str]], output_dir: Path) -
     plot_gap_rows = build_plot_gap_vs_resolution(rows)
     plot_runtime_rows = build_plot_runtime_vs_resolution(rows)
     plot_symmetry_rows = build_plot_symmetry_vs_bandwidth(rows)
+    plot_normal_rows = build_plot_normal_vs_orientation(rows)
+    plot_runtime_orientation_rows = build_plot_runtime_vs_orientation(rows)
 
     write_csv(output_dir / "paper_table_accuracy.csv", accuracy_rows)
     write_markdown_table(
@@ -294,6 +396,8 @@ def export_postprocess_artifacts(rows: list[dict[str, str]], output_dir: Path) -
     write_csv(output_dir / "plot_gap_vs_resolution.csv", plot_gap_rows)
     write_csv(output_dir / "plot_runtime_vs_resolution.csv", plot_runtime_rows)
     write_csv(output_dir / "plot_symmetry_vs_bandwidth.csv", plot_symmetry_rows)
+    write_csv(output_dir / "plot_normal_vs_orientation.csv", plot_normal_rows)
+    write_csv(output_dir / "plot_runtime_vs_orientation.csv", plot_runtime_orientation_rows)
 
 
 def main() -> int:

@@ -17,6 +17,7 @@ struct BenchmarkShapeSpec {
   double radius{0.5};
   Vec3 rotation_rpy_deg{0.0, 0.0, 0.0};
   std::string mesh_path;
+  std::string mesh_category;
   double mesh_scale{1.0};
   bool mesh_recenter{false};
   bool mesh_normalize{false};
@@ -69,6 +70,8 @@ struct BenchmarkSampleSpec {
   std::string shape_b;
   std::string mesh_a;
   std::string mesh_b;
+  std::string mesh_category;
+  std::string case_group;
   double mesh_scale_a{1.0};
   double mesh_scale_b{1.0};
   ReferenceGeometry a;
@@ -79,6 +82,8 @@ struct BenchmarkSampleSpec {
   Vec3 gap_axis{1.0, 0.0, 0.0};
   double orientation_angle_deg{0.0};
   Vec3 orientation_axis{0.0, 0.0, 1.0};
+  int orientation_index{0};
+  int pose_index{0};
   int sample_index{0};
   int seed{1};
 };

@@ -377,6 +377,22 @@ struct FclShapeInstance {
   fcl::Transform3d transform = fcl::Transform3d::Identity();
 };
 
+Vec3 refinedReferenceNormal(const ReferenceGeometry& a,
+                            const ReferenceGeometry& b,
+                            const Vec3& point_a,
+                            const Vec3& point_b,
+                            const Vec3& fallback_normal) {
+  const double probe_distance = std::max(1e-4, 1e-3 * std::max(a.boundingRadius(), b.boundingRadius()));
+  const Vec3 separation_normal = normalized(point_b - point_a, fallback_normal);
+  const Vec3 normal_a = a.normalAt(point_a + fallback_normal * probe_distance);
+  const Vec3 normal_b = -b.normalAt(point_b - fallback_normal * probe_distance);
+  Vec3 refined = normalized(normal_a + normal_b, separation_normal);
+  if (dot(refined, fallback_normal) < 0.0) {
+    refined = -refined;
+  }
+  return refined;
+}
+
 std::optional<FclShapeInstance> makeFclShape(const ReferenceGeometry& geometry) {
   using MeshModel = fcl::BVHModel<fcl::OBBRSSd>;
 
@@ -470,6 +486,7 @@ DistanceQueryResult fclDistance(const ReferenceGeometry& a,
     point_a = a.closestPoint(b.center);
     point_b = b.closestPoint(a.center);
   }
+  normal = refinedReferenceNormal(a, b, point_a, point_b, normal);
   if (dot(normal, fallback_normal) < 0.0) {
     normal = -normal;
   }
@@ -625,12 +642,20 @@ Vec3 ReferenceGeometry::normalAt(const Vec3& query) const {
     return plane_normal;
   }
   if (type == ShapeType::Mesh) {
-    const Vec3 point = closestPoint(query);
+    const Vec3 local_query = toLocalPoint(query);
+    const ClosestPointResult closest = closestPointOnMesh(*mesh, local_query);
+    const Vec3 world_point = toWorldPoint(closest.point);
+    Vec3 world_normal = toWorldDirection(closest.normal);
+    const Vec3 offset = query - world_point;
     const double phi = signedDistance(query);
-    if (phi < 0.0) {
-      return normalized(point - query, {1.0, 0.0, 0.0});
+    if (phi >= 0.0) {
+      if (dot(offset, world_normal) < 0.0) {
+        world_normal = -world_normal;
+      }
+    } else if (dot(offset, world_normal) > 0.0) {
+      world_normal = -world_normal;
     }
-    return normalized(query - point, {1.0, 0.0, 0.0});
+    return normalized(world_normal, {1.0, 0.0, 0.0});
   }
 
   if (signedDistance(query) >= 0.0) {

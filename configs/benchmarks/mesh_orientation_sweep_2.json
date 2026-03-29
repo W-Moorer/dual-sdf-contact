@@ -1,0 +1,42 @@
+{
+  "benchmark_name": "mesh_orientation_sweep_2",
+  "case_family": "mesh",
+  "sweep_family": "orientation_sweep",
+  "description": "Orientation sweep for the second nonconvex U-shaped mesh against a box, intended for appendix stability analysis.",
+  "sdf_backends": ["analytic", "openvdb"],
+  "reference_backends": ["analytic", "fcl"],
+  "solver_backends": ["simple"],
+  "voxel_sizes": [0.08],
+  "narrow_band_half_widths": [2.0, 4.0],
+  "runtime_iterations": 12,
+  "enable_solver_probe": true,
+  "seed": 53,
+  "orientation_axis": [0.0, 1.0, 0.0],
+  "orientation_apply_to": "a",
+  "orientation_yaw_degrees": [0.0, 20.0, 40.0, 60.0, 80.0, 100.0],
+  "random_orientation_count": 1,
+  "random_orientation_min_deg": -25.0,
+  "random_orientation_max_deg": 25.0,
+  "base_case": {
+    "name": "concave_u_mesh_box_orientation_base",
+    "gap_axis": [1.0, 0.0, 0.0],
+    "a": {
+      "name": "concave_u_mesh_a",
+      "type": "mesh",
+      "center": [0.0, 0.0, 0.0],
+      "rotation_rpy_deg": [0.0, 0.0, 0.0],
+      "mesh_path": "../../data/meshes/concave_u_block.obj",
+      "mesh_category": "nonconvex",
+      "mesh_scale": 0.48,
+      "mesh_recenter": true,
+      "mesh_normalize": false
+    },
+    "b": {
+      "name": "box_b",
+      "type": "box",
+      "center": [1.36, -0.08, 0.04],
+      "half_extents": [0.36, 0.30, 0.28],
+      "rotation_rpy_deg": [0.0, 0.0, 12.0]
+    }
+  }
+}

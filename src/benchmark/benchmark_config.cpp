@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <optional>
 #include <random>
 #include <sstream>
@@ -25,6 +26,13 @@ std::string joinWithDelimiter(const std::vector<std::string>& values, std::strin
     stream << values[index];
   }
   return stream.str();
+}
+
+std::string toLower(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
 }
 
 const JsonValue& requireObjectField(const JsonValue& object, std::string_view field) {
@@ -179,6 +187,7 @@ BenchmarkShapeSpec parseShapeSpec(const JsonValue& value, const std::filesystem:
   } else if (spec.type == "mesh") {
     const std::filesystem::path mesh_path = requireStringField(value, "mesh_path");
     spec.mesh_path = (mesh_path.is_absolute() ? mesh_path : (base_dir / mesh_path)).lexically_normal().generic_string();
+    spec.mesh_category = optionalStringField(value, "mesh_category").value_or("");
     spec.mesh_scale = optionalNumberField(value, "mesh_scale").value_or(1.0);
     spec.mesh_recenter = optionalBoolField(value, "mesh_recenter").value_or(false);
     spec.mesh_normalize = optionalBoolField(value, "mesh_normalize").value_or(false);
@@ -211,6 +220,41 @@ std::string meshLabel(const BenchmarkShapeSpec& spec) {
   return std::filesystem::path(spec.mesh_path).filename().generic_string();
 }
 
+std::string meshCategoryLabel(const BenchmarkShapeSpec& spec) {
+  if (spec.type != "mesh") {
+    return "none";
+  }
+  if (!spec.mesh_category.empty()) {
+    return spec.mesh_category;
+  }
+  const std::string filename = toLower(std::filesystem::path(spec.mesh_path).filename().generic_string());
+  if (filename.find("concave") != std::string::npos || filename.find("nonconvex") != std::string::npos ||
+      filename.find("bracket") != std::string::npos || filename.find("slot") != std::string::npos ||
+      filename.find("l_block") != std::string::npos) {
+    return "nonconvex";
+  }
+  return "convex";
+}
+
+std::string combinedMeshCategory(const BenchmarkShapeSpec& a, const BenchmarkShapeSpec& b) {
+  const std::string category_a = meshCategoryLabel(a);
+  const std::string category_b = meshCategoryLabel(b);
+  if (category_a == "none" && category_b == "none") {
+    return "none";
+  }
+  if (category_a == "nonconvex" || category_b == "nonconvex") {
+    return "nonconvex";
+  }
+  return "convex";
+}
+
+std::string caseGroupLabel(const BenchmarkConfig& config, const BenchmarkCaseSpec& case_spec) {
+  if (config.case_family == "primitive") {
+    return "primitive";
+  }
+  return combinedMeshCategory(case_spec.a, case_spec.b) == "nonconvex" ? "mesh_nonconvex" : "mesh";
+}
+
 ReferenceGeometry buildGeometry(const BenchmarkShapeSpec& spec, const Mat3& extra_rotation = identityMat3()) {
   const Mat3 rotation = matMul(extra_rotation, rotationFromRpyDegrees(spec.rotation_rpy_deg));
   if (spec.type == "sphere") {
@@ -230,6 +274,10 @@ ReferenceGeometry buildGeometry(const BenchmarkShapeSpec& spec, const Mat3& extr
 }
 
 double caseSignedDistance(const ReferenceGeometry& a, const ReferenceGeometry& b) {
+  if ((a.type == ShapeType::Mesh || b.type == ShapeType::Mesh) && FclReferenceBackend::realBackendAvailable()) {
+    const FclReferenceBackend fcl_backend;
+    return fcl_backend.distance(a, b).signed_distance;
+  }
   const AnalyticReferenceBackend analytic_backend;
   return analytic_backend.distance(a, b).signed_distance;
 }
@@ -329,6 +377,7 @@ JsonValue shapeSpecValue(const BenchmarkShapeSpec& spec) {
     value["half_extents"] = vec3Value(spec.half_extents);
   } else if (spec.type == "mesh") {
     value["mesh_path"] = JsonValue(spec.mesh_path);
+    value["mesh_category"] = JsonValue(meshCategoryLabel(spec));
     value["mesh_scale"] = JsonValue(spec.mesh_scale);
     value["mesh_recenter"] = JsonValue(spec.mesh_recenter);
     value["mesh_normalize"] = JsonValue(spec.mesh_normalize);
@@ -365,6 +414,7 @@ ReferenceGeometry rotatedGeometry(const BenchmarkShapeSpec& spec, const Vec3& ax
 
 BenchmarkSampleSpec makeSample(const BenchmarkConfig& config,
                                int sample_index,
+                               int orientation_index,
                                const BenchmarkCaseSpec& case_spec,
                                double voxel_size,
                                double narrow_band_half_width,
@@ -394,6 +444,8 @@ BenchmarkSampleSpec makeSample(const BenchmarkConfig& config,
   sample.shape_b = shapeTypeLabel(case_spec.b);
   sample.mesh_a = meshLabel(case_spec.a);
   sample.mesh_b = meshLabel(case_spec.b);
+  sample.mesh_category = combinedMeshCategory(case_spec.a, case_spec.b);
+  sample.case_group = caseGroupLabel(config, case_spec);
   sample.mesh_scale_a = case_spec.a.mesh_scale;
   sample.mesh_scale_b = case_spec.b.mesh_scale;
   sample.shape_pair = sample.shape_a + "-" + sample.shape_b;
@@ -403,6 +455,8 @@ BenchmarkSampleSpec makeSample(const BenchmarkConfig& config,
   sample.gap_axis = case_spec.gap_axis;
   sample.orientation_angle_deg = orientation_angle_deg;
   sample.orientation_axis = orientation_axis;
+  sample.orientation_index = orientation_index;
+  sample.pose_index = orientation_index;
   sample.sample_index = sample_index;
   sample.seed = config.seed;
   return sample;
@@ -539,11 +593,13 @@ std::vector<BenchmarkSampleSpec> expandBenchmarkSamples(const BenchmarkConfig& c
     const double case_gap = (config.sweep_family == "gap_sweep")
                                 ? caseSignedDistance(buildGeometry(case_spec.a), buildGeometry(case_spec.b))
                                 : requested_gap;
-    for (double orientation_angle_deg : orientation_values) {
+    for (std::size_t orientation_index = 0; orientation_index < orientation_values.size(); ++orientation_index) {
+      const double orientation_angle_deg = orientation_values[orientation_index];
       for (double voxel_size : config.voxel_sizes) {
         for (double narrow_band_half_width : config.narrow_band_half_widths) {
           samples.push_back(makeSample(config,
                                        sample_index++,
+                                       static_cast<int>(orientation_index),
                                        case_spec,
                                        voxel_size,
                                        narrow_band_half_width,

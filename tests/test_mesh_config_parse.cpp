@@ -25,6 +25,40 @@ int main() {
     std::cerr << "mesh_smoke samples should carry mesh labels.\n";
     return 1;
   }
+  if (samples.front().mesh_category != "convex" && samples.front().mesh_category != "nonconvex") {
+    std::cerr << "mesh_smoke samples should carry mesh category labels.\n";
+    return 1;
+  }
+
+  const auto orientation_config =
+      loadBenchmarkConfig(sourceDir() / "configs" / "benchmarks" / "mesh_orientation_sweep.json");
+  if (orientation_config.sweep_family != "orientation_sweep") {
+    std::cerr << "mesh_orientation_sweep should parse as an orientation sweep.\n";
+    return 1;
+  }
+
+  const auto nonconvex_config =
+      loadBenchmarkConfig(sourceDir() / "configs" / "benchmarks" / "mesh_nonconvex_smoke.json");
+  const auto nonconvex_samples = expandBenchmarkSamples(nonconvex_config);
+  if (nonconvex_samples.empty() || nonconvex_samples.front().case_group != "mesh_nonconvex") {
+    std::cerr << "mesh_nonconvex_smoke should produce mesh_nonconvex samples.\n";
+    return 1;
+  }
+
+  const auto second_nonconvex_config =
+      loadBenchmarkConfig(sourceDir() / "configs" / "benchmarks" / "mesh_nonconvex_smoke_2.json");
+  const auto second_nonconvex_samples = expandBenchmarkSamples(second_nonconvex_config);
+  if (second_nonconvex_samples.empty() || second_nonconvex_samples.front().mesh_a != "concave_u_block.obj") {
+    std::cerr << "mesh_nonconvex_smoke_2 should produce samples for concave_u_block.obj.\n";
+    return 1;
+  }
+
+  const auto second_orientation_config =
+      loadBenchmarkConfig(sourceDir() / "configs" / "benchmarks" / "mesh_orientation_sweep_2.json");
+  if (second_orientation_config.sweep_family != "orientation_sweep") {
+    std::cerr << "mesh_orientation_sweep_2 should parse as an orientation sweep.\n";
+    return 1;
+  }
 
   return 0;
 }

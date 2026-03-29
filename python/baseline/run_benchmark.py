@@ -7,6 +7,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .export_camera_ready_tables import export_camera_ready_tables
+from .experiment_freeze import annotate_benchmark_output, annotate_suite_output
 from .postprocess_benchmark import aggregate_benchmark_dirs, export_postprocess_artifacts
 from .run_example import project_root, resolve_executable
 
@@ -25,8 +27,24 @@ SUITES = {
         "configs/benchmarks/orientation_sweep.json",
         "configs/benchmarks/resolution_sweep.json",
         "configs/benchmarks/mesh_smoke.json",
+        "configs/benchmarks/mesh_nonconvex_smoke.json",
         "configs/benchmarks/mesh_gap_sweep.json",
+        "configs/benchmarks/mesh_orientation_sweep.json",
         "configs/benchmarks/mesh_resolution_sweep.json",
+    ],
+    "paper_extended": [
+        "configs/benchmarks/primitive_smoke.json",
+        "configs/benchmarks/gap_sweep.json",
+        "configs/benchmarks/orientation_sweep.json",
+        "configs/benchmarks/resolution_sweep.json",
+        "configs/benchmarks/mesh_smoke.json",
+        "configs/benchmarks/mesh_nonconvex_smoke.json",
+        "configs/benchmarks/mesh_nonconvex_smoke_2.json",
+        "configs/benchmarks/mesh_gap_sweep.json",
+        "configs/benchmarks/mesh_gap_sweep_2.json",
+        "configs/benchmarks/mesh_resolution_sweep.json",
+        "configs/benchmarks/mesh_orientation_sweep.json",
+        "configs/benchmarks/mesh_orientation_sweep_2.json",
     ],
 }
 
@@ -39,6 +57,13 @@ def load_benchmark_name(config_path: Path) -> str:
     with config_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     return str(payload["benchmark_name"])
+
+
+def benchmark_output_dir(output_dir: Path | None, benchmark_config: Path) -> Path:
+    benchmark_name = load_benchmark_name(benchmark_config)
+    if output_dir is None:
+        return project_root() / "outputs" / "ex05_compare_backends" / benchmark_name
+    return output_dir / benchmark_name
 
 
 def run_single(
@@ -97,7 +122,7 @@ def main() -> int:
     if args.benchmark_config:
         suite_name = args.suite_name or "standalone"
         run_name = args.run_name or load_benchmark_name(args.benchmark_config)
-        return run_single(
+        return_code = run_single(
             executable=executable,
             benchmark_config=args.benchmark_config,
             output_dir=args.output_dir,
@@ -108,6 +133,14 @@ def main() -> int:
             suite_name=suite_name,
             run_name=run_name,
         )
+        if return_code == 0:
+            annotate_benchmark_output(
+                benchmark_output_dir(args.output_dir, args.benchmark_config),
+                suite_name=suite_name,
+                run_name=run_name,
+                benchmark_name=load_benchmark_name(args.benchmark_config),
+            )
+        return return_code
 
     suite_name = args.suite_name or args.suite
     run_name = args.run_name or f"{args.suite}_{timestamp_tag()}"
@@ -130,10 +163,19 @@ def main() -> int:
         )
         if return_code != 0:
             return return_code
-        benchmark_dirs.append(benchmark_root / load_benchmark_name(config_path))
+        benchmark_dir = benchmark_root / load_benchmark_name(config_path)
+        annotate_benchmark_output(
+            benchmark_dir,
+            suite_name=suite_name,
+            run_name=run_name,
+            benchmark_name=load_benchmark_name(config_path),
+        )
+        benchmark_dirs.append(benchmark_dir)
 
     rows = aggregate_benchmark_dirs(benchmark_dirs)
     export_postprocess_artifacts(rows, suite_root)
+    export_camera_ready_tables(suite_root, suite_root)
+    annotate_suite_output(suite_root, suite_name=suite_name, run_name=run_name, benchmark_dirs=benchmark_dirs)
     return 0
 
 

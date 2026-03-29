@@ -18,17 +18,18 @@
       "name": "mesh_a",
       "type": "mesh",
       "center": [0.0, 0.0, 0.0],
-      "rotation_rpy_deg": [15.0, 0.0, 20.0],
-      "mesh_path": "../../data/meshes/unit_octahedron.obj",
-      "mesh_scale": 0.65,
+      "rotation_rpy_deg": [0.0, 0.0, 20.0],
+      "mesh_path": "../../data/meshes/concave_l_block.obj",
+      "mesh_category": "nonconvex",
+      "mesh_scale": 0.50,
       "mesh_recenter": true,
       "mesh_normalize": false
     },
     "b": {
       "name": "sphere_b",
       "type": "sphere",
-      "center": [1.36, 0.06, 0.0],
-      "radius": 0.56
+      "center": [1.44, 0.04, 0.0],
+      "radius": 0.52
     }
   }
 }

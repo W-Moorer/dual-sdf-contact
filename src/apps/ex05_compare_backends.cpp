@@ -63,10 +63,16 @@ struct SampleRecord {
   std::string shape_b;
   std::string mesh_a;
   std::string mesh_b;
+  std::string mesh_category;
+  std::string case_group;
   std::string sdf_backend;
   std::string sdf_provider_backend;
   std::string reference_backend;
   std::string reference_engine_name;
+  std::string reference_source_label;
+  std::string reference_mode;
+  std::string reference_quality;
+  std::string reference_diagnostic_label;
   std::string solver_backend;
   std::string solver_name;
   double voxel_size{0.0};
@@ -74,6 +80,9 @@ struct SampleRecord {
   double mesh_scale_a{1.0};
   double mesh_scale_b{1.0};
   int seed{0};
+  int sample_count{1};
+  int orientation_index{0};
+  int pose_index{0};
   double requested_gap{0.0};
   double orientation_angle_deg{0.0};
   double analytic_reference_distance{0.0};
@@ -93,11 +102,15 @@ struct SampleRecord {
   double symmetry_residual{0.0};
   double tangent_orthogonality_residual{0.0};
   double point_distance_consistency{0.0};
+  double reference_point_distance_consistency{0.0};
+  double reference_normal_alignment_residual{0.0};
   int invalid_result_count{0};
   int degenerate_normal_count{0};
   int tangent_frame_fallback_count{0};
   int narrow_band_edge_hit_count{0};
   int gradient_consistent_flag{0};
+  int reference_warning_flag{0};
+  int reference_grazing_flag{0};
   double analytic_reference_runtime_us{0.0};
   double reference_runtime_us{0.0};
   double analytic_sdf_runtime_us{0.0};
@@ -287,8 +300,127 @@ double pointDistanceConsistency(const ContactKinematicsResult& contact) {
   return std::abs(baseline::norm(contact.point_on_b - contact.point_on_a) - std::abs(contact.signed_gap));
 }
 
+double referencePointDistanceConsistency(const DistanceQueryResult& reference) {
+  return std::abs(
+      baseline::norm(reference.closest_point_b - reference.closest_point_a) - std::abs(reference.signed_distance));
+}
+
+double referenceNormalAlignmentResidual(const DistanceQueryResult& reference) {
+  const baseline::Vec3 separation = reference.closest_point_b - reference.closest_point_a;
+  const double separation_norm = baseline::norm(separation);
+  if (separation_norm <= 1e-10) {
+    return 1.0;
+  }
+  const baseline::Vec3 separation_normal = separation / separation_norm;
+  return 1.0 -
+         std::abs(baseline::dot(separation_normal, baseline::normalized(reference.normal, {1.0, 0.0, 0.0})));
+}
+
 bool invalidContact(const ContactKinematicsResult& contact) {
   return !std::isfinite(contact.signed_gap) || !contact.hasFlag(baseline::ContactSupportPointsValid);
+}
+
+struct ReferenceMetadata {
+  std::string source_label;
+  std::string mode;
+  std::string quality;
+  std::string diagnostic_label;
+  int warning_flag{0};
+  int grazing_flag{0};
+};
+
+ReferenceMetadata classifyReferenceBase(const BenchmarkSampleSpec& sample,
+                                        const ResolvedReferenceBackend& backend,
+                                        const baseline::ReferenceGeometryQueryEngine& engine) {
+  const std::string engine_name = engine.name();
+  const bool mesh_case = sample.case_family == "mesh";
+  if (backend.selected_name == "fcl" && engine_name == "fcl-real") {
+    return {engine_name, mesh_case ? "fcl_mesh_distance" : "fcl_primitive_distance", "high", "ok", 0, 0};
+  }
+  if (!mesh_case && backend.selected_name == "analytic") {
+    return {engine_name, "analytic_closed_form", "exact", "ok", 0, 0};
+  }
+  if (mesh_case && backend.selected_name == "analytic") {
+    return {engine_name, "analytic_mesh_proxy", "approximate", "mesh-proxy", 1, 0};
+  }
+  if (engine_name.find("fallback") != std::string::npos) {
+    return {engine_name, "fallback_analytic", "approximate", "fallback", 1, 0};
+  }
+  return {engine_name,
+          mesh_case ? "mesh_generic" : "primitive_generic",
+          mesh_case ? "approximate" : "medium",
+          mesh_case ? "mesh-generic" : "ok",
+          mesh_case ? 1 : 0,
+          0};
+}
+
+ReferenceMetadata finalizeReferenceMetadata(const BenchmarkSampleSpec& sample,
+                                            const DistanceQueryResult& reference,
+                                            ReferenceMetadata metadata) {
+  const double scale = std::max(sample.a.boundingRadius(), sample.b.boundingRadius());
+  const double point_consistency = referencePointDistanceConsistency(reference);
+  const double normal_alignment_residual = referenceNormalAlignmentResidual(reference);
+  const bool near_contact = std::abs(reference.signed_distance) <= std::max(1e-4, 0.10 * scale);
+  const bool grazing = near_contact && normal_alignment_residual > 0.20;
+  const bool point_mismatch = point_consistency > std::max(1e-4, 0.025 * scale);
+
+  if (grazing && point_mismatch) {
+    metadata.diagnostic_label = "grazing+point-mismatch";
+  } else if (grazing) {
+    metadata.diagnostic_label = "grazing";
+  } else if (point_mismatch) {
+    metadata.diagnostic_label = "point-mismatch";
+  }
+
+  if (grazing) {
+    metadata.grazing_flag = 1;
+    metadata.warning_flag = 1;
+    if (metadata.quality == "high") {
+      metadata.quality = "grazing-caution";
+    } else if (metadata.quality == "medium") {
+      metadata.quality = "caution";
+    } else if (metadata.quality == "approximate") {
+      metadata.quality = "low";
+    }
+  } else if (point_mismatch) {
+    metadata.warning_flag = 1;
+    if (metadata.quality == "high") {
+      metadata.quality = "medium";
+    }
+  }
+
+  return metadata;
+}
+
+JsonValue defaultExperimentFreezeValue() {
+  return JsonValue::Object{
+      {"default_seed", 17},
+      {"freeze_name", "paper_experiment_freeze_v1"},
+      {"notes", "Phase-6 paper sprint freeze with OpenVDB+FCL+Simple as the recommended WSL mainline."},
+      {"recommended_backends",
+       JsonValue::Object{
+           {"reference", "fcl"},
+           {"sdf", "openvdb"},
+           {"solver", "simple"},
+       }},
+      {"recommended_narrow_band_half_widths",
+       JsonValue::Object{
+           {"default", 4.0},
+           {"tight", 2.0},
+           {"wide", 8.0},
+       }},
+      {"recommended_suites",
+       JsonValue::Array{
+           JsonValue("paper_minimal"),
+           JsonValue("paper_extended"),
+       }},
+      {"recommended_voxel_sizes",
+       JsonValue::Object{
+           {"coarse", 0.16},
+           {"fine", 0.04},
+           {"medium", 0.08},
+       }},
+  };
 }
 
 baseline::SingleStepContactParams makeSolverParams(const ContactKinematicsResult& contact) {
@@ -313,6 +445,7 @@ JsonValue sampleRecordValue(const SampleRecord& record) {
       {"analytic_sdf_runtime_us", record.analytic_sdf_runtime_us},
       {"benchmark_name", record.benchmark_name},
       {"case_family", record.case_family},
+      {"case_group", record.case_group},
       {"case_name", record.case_name},
       {"config_summary", record.config_summary},
       {"degenerate_normal_count", record.degenerate_normal_count},
@@ -322,6 +455,7 @@ JsonValue sampleRecordValue(const SampleRecord& record) {
       {"invalid_result_count", record.invalid_result_count},
       {"mesh_a", record.mesh_a},
       {"mesh_b", record.mesh_b},
+      {"mesh_category", record.mesh_category},
       {"mesh_scale_a", record.mesh_scale_a},
       {"mesh_scale_b", record.mesh_scale_b},
       {"narrow_band_edge_hit_count", record.narrow_band_edge_hit_count},
@@ -329,18 +463,29 @@ JsonValue sampleRecordValue(const SampleRecord& record) {
       {"normal_angle_error_deg", record.normal_angle_error_deg},
       {"normal_impulse", record.normal_impulse},
       {"orientation_angle_deg", record.orientation_angle_deg},
+      {"orientation_index", record.orientation_index},
       {"point_distance_consistency", record.point_distance_consistency},
       {"reference_backend", record.reference_backend},
       {"reference_distance", record.reference_distance},
+      {"reference_diagnostic_label", record.reference_diagnostic_label},
       {"reference_engine_name", record.reference_engine_name},
       {"reference_gap_error_vs_analytic", record.reference_gap_error_vs_analytic},
+      {"reference_grazing_flag", record.reference_grazing_flag},
+      {"reference_mode", record.reference_mode},
+      {"reference_normal_alignment_residual", record.reference_normal_alignment_residual},
       {"reference_normal_angle_error_vs_analytic_deg", record.reference_normal_angle_error_vs_analytic_deg},
+      {"reference_point_distance_consistency", record.reference_point_distance_consistency},
+      {"reference_quality", record.reference_quality},
+      {"reference_source_label", record.reference_source_label},
+      {"reference_warning_flag", record.reference_warning_flag},
       {"reference_runtime_us", record.reference_runtime_us},
       {"reference_signed_distance", record.reference_signed_distance},
       {"relative_gap_error", record.relative_gap_error},
+      {"pose_index", record.pose_index},
       {"requested_gap", record.requested_gap},
       {"run_name", record.run_name},
       {"runtime_total_us", record.runtime_total_us},
+      {"sample_count", record.sample_count},
       {"sample_name", record.sample_name},
       {"sdf_backend", record.sdf_backend},
       {"sdf_gap_error_vs_analytic", record.sdf_gap_error_vs_analytic},
@@ -452,6 +597,8 @@ int main(int argc, char** argv) {
       for (const ResolvedReferenceBackend& reference_backend : reference_backends) {
         auto reference_engine = makeReferenceBackend(reference_backend);
         const DistanceQueryResult reference_result = reference_engine->distance(sample.a, sample.b);
+        const ReferenceMetadata reference_metadata =
+            finalizeReferenceMetadata(sample, reference_result, classifyReferenceBase(sample, reference_backend, *reference_engine));
         const double reference_runtime_us = averageRuntimeMicros(config.runtime_iterations, [&]() {
           return reference_engine->distance(sample.a, sample.b).signed_distance;
         });
@@ -497,17 +644,26 @@ int main(int argc, char** argv) {
             record.shape_b = sample.shape_b;
             record.mesh_a = sample.mesh_a;
             record.mesh_b = sample.mesh_b;
+            record.mesh_category = sample.mesh_category;
+            record.case_group = sample.case_group;
             record.mesh_scale_a = sample.mesh_scale_a;
             record.mesh_scale_b = sample.mesh_scale_b;
             record.sdf_backend = sdf_backend.selected_name;
             record.sdf_provider_backend = sdf_a->backendName();
             record.reference_backend = reference_backend.selected_name;
             record.reference_engine_name = reference_engine->name();
+            record.reference_source_label = reference_metadata.source_label;
+            record.reference_mode = reference_metadata.mode;
+            record.reference_quality = reference_metadata.quality;
+            record.reference_diagnostic_label = reference_metadata.diagnostic_label;
             record.solver_backend = solver_backend.selected_name;
             record.solver_name = solver->name();
             record.voxel_size = sample.voxel_size;
             record.narrow_band_half_width = sample.narrow_band_half_width;
             record.seed = sample.seed;
+            record.sample_count = 1;
+            record.orientation_index = sample.orientation_index;
+            record.pose_index = sample.pose_index;
             record.requested_gap = sample.requested_gap;
             record.orientation_angle_deg = sample.orientation_angle_deg;
             record.analytic_reference_distance = analytic_reference_result.distance;
@@ -531,6 +687,8 @@ int main(int argc, char** argv) {
             record.symmetry_residual = selected_contact.symmetry_residual;
             record.tangent_orthogonality_residual = selected_contact.tangent_orthogonality;
             record.point_distance_consistency = pointDistanceConsistency(selected_contact);
+            record.reference_point_distance_consistency = referencePointDistanceConsistency(reference_result);
+            record.reference_normal_alignment_residual = referenceNormalAlignmentResidual(reference_result);
             record.invalid_result_count = invalidContact(selected_contact) ? 1 : 0;
             record.degenerate_normal_count =
                 selected_contact.hasFlag(ContactUsedFallbackNormal) ? 1 : 0;
@@ -540,6 +698,8 @@ int main(int argc, char** argv) {
                 selected_contact.hasFlag(ContactNearNarrowBandBoundary) ? 1 : 0;
             record.gradient_consistent_flag =
                 selected_contact.hasFlag(ContactGradientsConsistent) ? 1 : 0;
+            record.reference_warning_flag = reference_metadata.warning_flag;
+            record.reference_grazing_flag = reference_metadata.grazing_flag;
             record.analytic_reference_runtime_us = analytic_reference_runtime_us;
             record.reference_runtime_us = reference_runtime_us;
             record.analytic_sdf_runtime_us = analytic_sdf_runtime_us;
@@ -569,6 +729,7 @@ int main(int argc, char** argv) {
           record.run_name,
           record.benchmark_name,
           record.case_family,
+          record.case_group,
           record.sweep_family,
           record.case_name,
           record.sample_name,
@@ -577,17 +738,25 @@ int main(int argc, char** argv) {
           record.shape_pair,
           record.mesh_a,
           record.mesh_b,
+          record.mesh_category,
           formatDouble(record.mesh_scale_a),
           formatDouble(record.mesh_scale_b),
           record.sdf_backend,
           record.sdf_provider_backend,
           record.reference_backend,
           record.reference_engine_name,
+          record.reference_source_label,
+          record.reference_mode,
+          record.reference_quality,
+          record.reference_diagnostic_label,
           record.solver_backend,
           record.solver_name,
           formatDouble(record.voxel_size),
           formatDouble(record.narrow_band_half_width),
           std::to_string(record.seed),
+          std::to_string(record.sample_count),
+          std::to_string(record.orientation_index),
+          std::to_string(record.pose_index),
           formatDouble(record.requested_gap),
           formatDouble(record.orientation_angle_deg),
           formatDouble(record.analytic_reference_signed_distance),
@@ -605,10 +774,14 @@ int main(int argc, char** argv) {
           formatDouble(record.symmetry_residual),
           formatDouble(record.tangent_orthogonality_residual),
           formatDouble(record.point_distance_consistency),
+          formatDouble(record.reference_point_distance_consistency),
+          formatDouble(record.reference_normal_alignment_residual),
           std::to_string(record.invalid_result_count),
           std::to_string(record.degenerate_normal_count),
           std::to_string(record.tangent_frame_fallback_count),
           std::to_string(record.narrow_band_edge_hit_count),
+          std::to_string(record.reference_warning_flag),
+          std::to_string(record.reference_grazing_flag),
           formatDouble(record.reference_runtime_us),
           formatDouble(record.dual_sdf_runtime_us),
           formatDouble(record.solver_runtime_us),
@@ -624,17 +797,21 @@ int main(int argc, char** argv) {
 
     apps::writeCsv(
         benchmark_output_dir / "samples.csv",
-        {"timestamp_utc", "suite_name", "run_name", "benchmark_name", "case_family", "sweep_family", "case_name",
-         "sample_name", "shape_a", "shape_b", "shape_pair", "mesh_a", "mesh_b", "mesh_scale_a", "mesh_scale_b",
-         "sdf_backend", "sdf_provider_backend", "reference_backend", "reference_engine_name", "solver_backend",
-         "solver_name", "voxel_size", "narrow_band_half_width", "seed", "requested_gap", "orientation_angle_deg",
-         "analytic_reference_signed_distance", "reference_signed_distance", "analytic_signed_gap", "signed_gap",
-         "gap_error", "absolute_gap_error", "relative_gap_error", "sdf_gap_error_vs_analytic",
-         "reference_gap_error_vs_analytic", "normal_angle_error_deg",
-         "sdf_normal_angle_error_vs_analytic_deg", "reference_normal_angle_error_vs_analytic_deg",
-         "symmetry_residual", "tangent_orthogonality_residual", "point_distance_consistency",
-         "invalid_result_count", "degenerate_normal_count", "tangent_frame_fallback_count",
-         "narrow_band_edge_hit_count", "reference_runtime_us", "dual_sdf_runtime_us", "solver_runtime_us",
+        {"timestamp_utc", "suite_name", "run_name", "benchmark_name", "case_family", "case_group", "sweep_family",
+         "case_name", "sample_name", "shape_a", "shape_b", "shape_pair", "mesh_a", "mesh_b", "mesh_category",
+         "mesh_scale_a", "mesh_scale_b", "sdf_backend", "sdf_provider_backend", "reference_backend",
+         "reference_engine_name", "reference_source_label", "reference_mode", "reference_quality",
+         "reference_diagnostic_label", "solver_backend", "solver_name", "voxel_size", "narrow_band_half_width",
+         "seed", "sample_count", "orientation_index", "pose_index", "requested_gap", "orientation_angle_deg",
+         "analytic_reference_signed_distance",
+         "reference_signed_distance", "analytic_signed_gap", "signed_gap", "gap_error", "absolute_gap_error",
+         "relative_gap_error", "sdf_gap_error_vs_analytic", "reference_gap_error_vs_analytic",
+         "normal_angle_error_deg", "sdf_normal_angle_error_vs_analytic_deg",
+         "reference_normal_angle_error_vs_analytic_deg", "symmetry_residual", "tangent_orthogonality_residual",
+         "point_distance_consistency", "reference_point_distance_consistency",
+         "reference_normal_alignment_residual", "invalid_result_count", "degenerate_normal_count",
+         "tangent_frame_fallback_count", "narrow_band_edge_hit_count", "reference_warning_flag",
+         "reference_grazing_flag", "reference_runtime_us", "dual_sdf_runtime_us", "solver_runtime_us",
          "runtime_total_us", "normal_impulse", "tangential_impulse_magnitude", "solver_residual",
          "solver_iterations", "solver_success_flag"},
         sample_rows);
@@ -642,11 +819,14 @@ int main(int argc, char** argv) {
     std::map<std::string, std::vector<const SampleRecord*>> grouped_records;
     for (const SampleRecord& record : records) {
       const std::string key = record.suite_name + "|" + record.run_name + "|" + record.benchmark_name + "|" +
-                              record.case_family + "|" + record.sweep_family + "|" + record.case_name + "|" +
-                              record.shape_pair + "|" + record.mesh_a + "|" + record.mesh_b + "|" +
-                              record.sdf_backend + "|" + record.reference_backend + "|" + record.solver_backend + "|" +
-                              formatDouble(record.voxel_size) + "|" + formatDouble(record.narrow_band_half_width) +
-                              "|" + std::to_string(record.seed);
+                              record.case_family + "|" + record.case_group + "|" + record.sweep_family + "|" +
+                              record.case_name + "|" + record.shape_pair + "|" + record.mesh_a + "|" +
+                              record.mesh_b + "|" + record.mesh_category + "|" + record.sdf_backend + "|" +
+                              record.reference_backend + "|" + record.reference_mode + "|" + record.solver_backend +
+                              "|" + formatDouble(record.voxel_size) + "|" +
+                              formatDouble(record.narrow_band_half_width) + "|" + std::to_string(record.seed) + "|" +
+                              std::to_string(record.orientation_index) + "|" +
+                              formatDouble(record.orientation_angle_deg);
       grouped_records[key].push_back(&record);
     }
 
@@ -672,7 +852,8 @@ int main(int argc, char** argv) {
     }
     for (const auto& [case_name, sample_ptr] : unique_cases) {
       const BenchmarkSampleSpec& sample = *sample_ptr;
-      report << "- `" << case_name << "`: `" << sample.shape_a << "-" << sample.shape_b << "`";
+      report << "- `" << case_name << "`: `" << sample.shape_a << "-" << sample.shape_b << "`"
+             << " (`case_group=" << sample.case_group << "`, `mesh_category=" << sample.mesh_category << "`)";
       if (!sample.mesh_a.empty() || !sample.mesh_b.empty()) {
         report << " (`mesh_a=" << (sample.mesh_a.empty() ? "-" : sample.mesh_a) << "`, `mesh_b="
                << (sample.mesh_b.empty() ? "-" : sample.mesh_b) << "`)";
@@ -726,6 +907,10 @@ int main(int argc, char** argv) {
           collect([](const SampleRecord& record) { return record.tangent_orthogonality_residual; });
       const NumericSummary point_distance =
           collect([](const SampleRecord& record) { return record.point_distance_consistency; });
+      const NumericSummary reference_point_distance =
+          collect([](const SampleRecord& record) { return record.reference_point_distance_consistency; });
+      const NumericSummary reference_normal_alignment =
+          collect([](const SampleRecord& record) { return record.reference_normal_alignment_residual; });
       const NumericSummary runtime_total =
           collect([](const SampleRecord& record) { return record.runtime_total_us; });
       const NumericSummary runtime_reference =
@@ -745,6 +930,8 @@ int main(int argc, char** argv) {
       int degenerate_normal_count = 0;
       int tangent_frame_fallback_count = 0;
       int narrow_band_edge_hit_count = 0;
+      int reference_warning_count = 0;
+      int reference_grazing_count = 0;
       int solver_success_count = 0;
       double batch_total_runtime_us = 0.0;
       for (const SampleRecord* record : values) {
@@ -752,6 +939,8 @@ int main(int argc, char** argv) {
         degenerate_normal_count += record->degenerate_normal_count;
         tangent_frame_fallback_count += record->tangent_frame_fallback_count;
         narrow_band_edge_hit_count += record->narrow_band_edge_hit_count;
+        reference_warning_count += record->reference_warning_flag;
+        reference_grazing_count += record->reference_grazing_flag;
         solver_success_count += record->solver_success_flag;
         batch_total_runtime_us += record->runtime_total_us;
       }
@@ -763,6 +952,7 @@ int main(int argc, char** argv) {
           first.run_name,
           first.benchmark_name,
           first.case_family,
+          first.case_group,
           first.sweep_family,
           first.case_name,
           first.shape_a,
@@ -770,19 +960,29 @@ int main(int argc, char** argv) {
           first.shape_pair,
           first.mesh_a,
           first.mesh_b,
+          first.mesh_category,
           formatDouble(first.mesh_scale_a),
           formatDouble(first.mesh_scale_b),
           first.sdf_backend,
           first.reference_backend,
+          first.reference_source_label,
+          first.reference_mode,
+          first.reference_quality,
+          first.reference_diagnostic_label,
           first.solver_backend,
           formatDouble(first.voxel_size),
           formatDouble(first.narrow_band_half_width),
           std::to_string(first.seed),
+          std::to_string(first.orientation_index),
+          std::to_string(first.pose_index),
+          formatDouble(first.orientation_angle_deg),
           std::to_string(values.size()),
           std::to_string(invalid_result_count),
           std::to_string(degenerate_normal_count),
           std::to_string(tangent_frame_fallback_count),
           std::to_string(narrow_band_edge_hit_count),
+          std::to_string(reference_warning_count),
+          std::to_string(reference_grazing_count),
           formatDouble(signed_gap.mean),
           formatDouble(reference_signed_distance.mean),
           formatDouble(gap_error.mean),
@@ -796,6 +996,8 @@ int main(int argc, char** argv) {
           formatDouble(symmetry_residual.mean),
           formatDouble(tangent_orthogonality.mean),
           formatDouble(point_distance.mean),
+          formatDouble(reference_point_distance.mean),
+          formatDouble(reference_normal_alignment.mean),
           formatDouble(runtime_reference.mean),
           formatDouble(runtime_sdf.mean),
           formatDouble(runtime_total.mean),
@@ -814,26 +1016,39 @@ int main(int argc, char** argv) {
           {"batch_total_runtime_us", batch_total_runtime_us},
           {"benchmark_name", first.benchmark_name},
           {"case_family", first.case_family},
+          {"case_group", first.case_group},
           {"case_name", first.case_name},
           {"degenerate_normal_count", degenerate_normal_count},
           {"gap_error", numericSummaryValue(gap_error)},
           {"invalid_result_count", invalid_result_count},
           {"mesh_a", first.mesh_a},
           {"mesh_b", first.mesh_b},
+          {"mesh_category", first.mesh_category},
           {"mesh_scale_a", first.mesh_scale_a},
           {"mesh_scale_b", first.mesh_scale_b},
           {"narrow_band_edge_hit_count", narrow_band_edge_hit_count},
           {"narrow_band_half_width", first.narrow_band_half_width},
           {"normal_angle_error_deg", numericSummaryValue(normal_angle_error)},
           {"normal_impulse", numericSummaryValue(normal_impulse)},
+          {"orientation_angle_deg", first.orientation_angle_deg},
+          {"orientation_index", first.orientation_index},
           {"point_distance_consistency", numericSummaryValue(point_distance)},
           {"reference_backend", first.reference_backend},
+          {"reference_diagnostic_label", first.reference_diagnostic_label},
           {"reference_gap_error_vs_analytic", numericSummaryValue(reference_gap_error_vs_analytic)},
+          {"reference_grazing_count", reference_grazing_count},
+          {"reference_mode", first.reference_mode},
+          {"reference_normal_alignment_residual", numericSummaryValue(reference_normal_alignment)},
           {"reference_normal_angle_error_vs_analytic_deg",
            numericSummaryValue(reference_normal_angle_error_vs_analytic)},
+          {"reference_point_distance_consistency", numericSummaryValue(reference_point_distance)},
+          {"reference_quality", first.reference_quality},
+          {"reference_source_label", first.reference_source_label},
+          {"reference_warning_count", reference_warning_count},
           {"reference_runtime_us", numericSummaryValue(runtime_reference)},
           {"reference_signed_distance", numericSummaryValue(reference_signed_distance)},
           {"relative_gap_error", numericSummaryValue(relative_gap_error)},
+          {"pose_index", first.pose_index},
           {"run_name", first.run_name},
           {"sample_count", static_cast<int>(values.size())},
           {"sdf_backend", first.sdf_backend},
@@ -861,27 +1076,37 @@ int main(int argc, char** argv) {
       report << "- `" << first.case_name << "` / `sdf=" << first.sdf_backend << "` / `reference="
              << first.reference_backend << "` / `solver=" << first.solver_backend << "` / `voxel="
              << formatDouble(first.voxel_size, 3) << "` / `nb=" << formatDouble(first.narrow_band_half_width, 1)
-             << "`: mean abs gap error `" << formatDouble(absolute_gap_error.mean)
+             << "` / `ref_quality=" << first.reference_quality << "` / `ref_diag="
+             << first.reference_diagnostic_label << "`";
+      if (std::abs(first.orientation_angle_deg) > 1e-12 || first.sweep_family == "orientation_sweep") {
+        report << " / `rot=" << formatDouble(first.orientation_angle_deg, 1) << "deg`";
+      }
+      report << ": mean abs gap error `" << formatDouble(absolute_gap_error.mean)
              << "`, mean normal angle error `" << formatDouble(normal_angle_error.mean)
-             << " deg`, mean runtime `" << formatDouble(runtime_total.mean) << " us`\n";
+             << " deg`, mean runtime `" << formatDouble(runtime_total.mean) << " us`"
+             << ", ref point residual `" << formatDouble(reference_point_distance.mean)
+             << "`, ref grazing count `" << reference_grazing_count << "`\n";
     }
 
     apps::writeCsv(
         benchmark_output_dir / "summary.csv",
-        {"suite_name", "run_name", "benchmark_name", "case_family", "sweep_family", "case_name", "shape_a",
-         "shape_b", "shape_pair", "mesh_a", "mesh_b", "mesh_scale_a", "mesh_scale_b", "sdf_backend",
-         "reference_backend", "solver_backend", "voxel_size", "narrow_band_half_width", "seed", "sample_count",
-         "invalid_result_count", "degenerate_normal_count", "tangent_frame_fallback_count",
-         "narrow_band_edge_hit_count", "signed_gap_mean", "reference_signed_distance_mean", "gap_error_mean",
-         "absolute_gap_error_mean", "relative_gap_error_mean", "sdf_gap_error_vs_analytic_mean",
-         "reference_gap_error_vs_analytic_mean", "normal_angle_error_deg_mean",
+        {"suite_name", "run_name", "benchmark_name", "case_family", "case_group", "sweep_family", "case_name",
+         "shape_a", "shape_b", "shape_pair", "mesh_a", "mesh_b", "mesh_category", "mesh_scale_a",
+         "mesh_scale_b", "sdf_backend", "reference_backend", "reference_source_label", "reference_mode",
+         "reference_quality", "reference_diagnostic_label", "solver_backend", "voxel_size",
+         "narrow_band_half_width", "seed",
+         "orientation_index", "pose_index", "orientation_angle_deg", "sample_count", "invalid_result_count",
+         "degenerate_normal_count", "tangent_frame_fallback_count", "narrow_band_edge_hit_count",
+         "reference_warning_count", "reference_grazing_count", "signed_gap_mean", "reference_signed_distance_mean",
+         "gap_error_mean", "absolute_gap_error_mean", "relative_gap_error_mean",
+         "sdf_gap_error_vs_analytic_mean", "reference_gap_error_vs_analytic_mean", "normal_angle_error_deg_mean",
          "sdf_normal_angle_error_vs_analytic_deg_mean",
          "reference_normal_angle_error_vs_analytic_deg_mean", "symmetry_residual_mean",
-         "tangent_orthogonality_residual_mean", "point_distance_consistency_mean", "reference_runtime_us_mean",
-         "dual_sdf_runtime_us_mean", "runtime_total_us_mean", "runtime_total_us_median",
-         "runtime_total_us_p95", "batch_total_runtime_us", "normal_impulse_mean",
-         "tangential_impulse_magnitude_mean", "solver_residual_mean", "solver_iterations_mean",
-         "solver_success_rate"},
+         "tangent_orthogonality_residual_mean", "point_distance_consistency_mean",
+         "reference_point_distance_consistency_mean", "reference_normal_alignment_residual_mean",
+         "reference_runtime_us_mean", "dual_sdf_runtime_us_mean", "runtime_total_us_mean",
+         "runtime_total_us_median", "runtime_total_us_p95", "batch_total_runtime_us", "normal_impulse_mean",
+         "tangential_impulse_magnitude_mean", "solver_residual_mean", "solver_iterations_mean", "solver_success_rate"},
         summary_rows);
 
     const JsonValue resolved_config_json = baseline::json::parse(benchmarkConfigToJson(config));
@@ -908,6 +1133,7 @@ int main(int argc, char** argv) {
             {"config", resolved_config_json},
             {"config_path", config_path.string()},
             {"config_summary", benchmarkConfigSummary(config)},
+            {"experiment_freeze", defaultExperimentFreezeValue()},
             {"run_name", config.run_name},
             {"resolved_reference_backends", resolved_reference_backends},
             {"resolved_sdf_backends", resolved_sdf_backends},
@@ -941,6 +1167,7 @@ int main(int argc, char** argv) {
                  {"openvdb", availability.openvdb_available},
                  {"siconos", availability.siconos_available},
              }},
+            {"experiment_freeze", defaultExperimentFreezeValue()},
             {"fallback_enabled",
              JsonValue::Object{
                  {"reference", availability.force_fallback_reference},

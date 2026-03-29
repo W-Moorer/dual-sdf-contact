@@ -1,0 +1,59 @@
+{
+  "benchmark_name": "mesh_nonconvex_smoke_2",
+  "case_family": "mesh",
+  "sweep_family": "primitive",
+  "description": "Second nonconvex mesh smoke matrix using a U-shaped concave asset.",
+  "sdf_backends": ["analytic", "openvdb"],
+  "reference_backends": ["analytic", "fcl"],
+  "solver_backends": ["simple"],
+  "voxel_sizes": [0.08],
+  "narrow_band_half_widths": [4.0],
+  "runtime_iterations": 12,
+  "enable_solver_probe": true,
+  "seed": 43,
+  "primitive_cases": [
+    {
+      "name": "concave_u_mesh_sphere_sep",
+      "gap_axis": [1.0, 0.0, 0.0],
+      "a": {
+        "name": "concave_u_mesh_a",
+        "type": "mesh",
+        "center": [0.0, 0.0, 0.0],
+        "rotation_rpy_deg": [0.0, 0.0, -14.0],
+        "mesh_path": "../../data/meshes/concave_u_block.obj",
+        "mesh_category": "nonconvex",
+        "mesh_scale": 0.46,
+        "mesh_recenter": true,
+        "mesh_normalize": false
+      },
+      "b": {
+        "name": "sphere_b",
+        "type": "sphere",
+        "center": [1.28, -0.02, 0.02],
+        "radius": 0.48
+      }
+    },
+    {
+      "name": "concave_u_mesh_box_sep",
+      "gap_axis": [1.0, 0.0, 0.0],
+      "a": {
+        "name": "concave_u_mesh_a",
+        "type": "mesh",
+        "center": [0.0, 0.0, 0.0],
+        "rotation_rpy_deg": [0.0, 0.0, 10.0],
+        "mesh_path": "../../data/meshes/concave_u_block.obj",
+        "mesh_category": "nonconvex",
+        "mesh_scale": 0.48,
+        "mesh_recenter": true,
+        "mesh_normalize": false
+      },
+      "b": {
+        "name": "box_b",
+        "type": "box",
+        "center": [1.42, -0.08, 0.0],
+        "half_extents": [0.36, 0.28, 0.26],
+        "rotation_rpy_deg": [0.0, 0.0, 16.0]
+      }
+    }
+  ]
+}
