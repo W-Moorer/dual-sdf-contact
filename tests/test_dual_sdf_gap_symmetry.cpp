@@ -18,7 +18,7 @@ int main() {
     std::cerr << "Signed gap lost symmetry.\n";
     return 1;
   }
-  if (std::abs(dot(ab.frame.normal, ba.frame.normal) + 1.0) > 1e-6) {
+  if (std::abs(dot(ab.normal, ba.normal) + 1.0) > 1e-6) {
     std::cerr << "Normals are not opposite.\n";
     return 1;
   }

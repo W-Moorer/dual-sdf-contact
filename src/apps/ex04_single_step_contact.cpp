@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
 
     const DualSdfContactCalculator calculator;
     const ContactGeometry geometry = calculator.compute(*sphere, plane);
-    const Vec3 relative_velocity_world = fromLocal(geometry.frame, {-1.2, 0.2, 0.1});
+    const Vec3 relative_velocity_world = fromLocal(geometry.frame(), {-1.2, 0.2, 0.1});
 
     const ContactProblemBuilder builder;
     const ContactProblem problem = builder.build(
@@ -85,7 +85,8 @@ int main(int argc, char** argv) {
             << "  \"sdf_note\": " << quoteJson(sdf_backend.note) << ",\n"
             << "  \"solver_note\": " << quoteJson(solver_backend.note) << ",\n"
             << "  \"signed_gap\": " << formatDouble(problem.geometry.signed_gap) << ",\n"
-            << "  \"normal\": " << apps::vec3Json(problem.geometry.frame.normal) << ",\n"
+            << "  \"normal\": " << apps::vec3Json(problem.geometry.normal) << ",\n"
+            << "  \"valid_flags\": " << problem.geometry.valid_flags << ",\n"
             << "  \"simple_solver\": {\n"
             << "    \"impulse\": " << apps::vector3Json(simple_result.impulse) << ",\n"
             << "    \"post_velocity\": " << apps::vector3Json(simple_result.post_velocity) << ",\n"

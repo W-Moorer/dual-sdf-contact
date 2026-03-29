@@ -53,6 +53,20 @@ inline std::string vec3Json(const Vec3& value) {
   return "[" + formatDouble(value.x) + ", " + formatDouble(value.y) + ", " + formatDouble(value.z) + "]";
 }
 
+inline std::string aabbJson(const Aabb3& value) {
+  if (!value.valid) {
+    return "{\"valid\": false}";
+  }
+  return "{\"valid\": true, \"lower\": " + vec3Json(value.lower) + ", \"upper\": " + vec3Json(value.upper) + "}";
+}
+
+inline double normalAngleDegrees(const Vec3& a, const Vec3& b) {
+  const Vec3 na = normalized(a, {1.0, 0.0, 0.0});
+  const Vec3 nb = normalized(b, {1.0, 0.0, 0.0});
+  const double cosine = clamp(dot(na, nb), -1.0, 1.0);
+  return std::acos(cosine) * 180.0 / 3.14159265358979323846;
+}
+
 inline std::string vector3Json(const Vector3& value) {
   return "[" + formatDouble(value[0]) + ", " + formatDouble(value[1]) + ", " + formatDouble(value[2]) + "]";
 }

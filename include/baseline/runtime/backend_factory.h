@@ -29,6 +29,9 @@ struct BackendAvailabilitySummary {
   bool hppfcl_available{false};
   bool fcl_available{false};
   bool siconos_available{false};
+  std::vector<std::string> sdf_backends_available;
+  std::vector<std::string> reference_backends_available;
+  std::vector<std::string> solver_backends_available;
   std::vector<std::string> real_backends;
 };
 

@@ -3,6 +3,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <optional>
+#include <utility>
+
+#if BASELINE_REAL_FCL_AVAILABLE
+#include <fcl/fcl.h>
+#endif
 
 namespace baseline {
 
@@ -18,6 +24,23 @@ Vec3 clampVec(const Vec3& value, const Vec3& lower, const Vec3& upper) {
   };
 }
 
+DistanceQueryResult makeDistanceResult(bool collision,
+                                       double signed_distance,
+                                       const Vec3& normal,
+                                       const Vec3& point_a,
+                                       const Vec3& point_b,
+                                       std::string backend_name) {
+  return {
+      collision,
+      std::max(0.0, signed_distance),
+      signed_distance,
+      normalized(normal, {1.0, 0.0, 0.0}),
+      point_a,
+      point_b,
+      std::move(backend_name),
+  };
+}
+
 DistanceQueryResult makeGenericResult(const ReferenceGeometry& a,
                                       const ReferenceGeometry& b,
                                       std::string backend_name) {
@@ -26,25 +49,18 @@ DistanceQueryResult makeGenericResult(const ReferenceGeometry& a,
   const Vec3 direction = point_b - point_a;
   const Vec3 normal = normalized(direction, normalized(b.center - a.center, {1.0, 0.0, 0.0}));
   const double signed_gap = dot(direction, normal);
-  return {
-      signed_gap <= 0.0,
-      std::max(0.0, signed_gap),
-      normal,
-      point_a,
-      point_b,
-      std::move(backend_name),
-  };
+  return makeDistanceResult(signed_gap <= 0.0, signed_gap, normal, point_a, point_b, std::move(backend_name));
 }
 
 DistanceQueryResult sphereSphereDistance(const ReferenceGeometry& a,
-                                        const ReferenceGeometry& b,
-                                        std::string backend_name) {
+                                         const ReferenceGeometry& b,
+                                         std::string backend_name) {
   const Vec3 center_delta = b.center - a.center;
   const Vec3 normal = normalized(center_delta, {1.0, 0.0, 0.0});
   const Vec3 point_a = a.center + normal * a.radius;
   const Vec3 point_b = b.center - normal * b.radius;
   const double signed_gap = dot(point_b - point_a, normal);
-  return {signed_gap <= 0.0, std::max(0.0, signed_gap), normal, point_a, point_b, std::move(backend_name)};
+  return makeDistanceResult(signed_gap <= 0.0, signed_gap, normal, point_a, point_b, std::move(backend_name));
 }
 
 DistanceQueryResult sphereBoxDistance(const ReferenceGeometry& sphere,
@@ -58,14 +74,8 @@ DistanceQueryResult sphereBoxDistance(const ReferenceGeometry& sphere,
   const Vec3 normal = normalized(direction, {1.0, 0.0, 0.0});
   const Vec3 point_sphere = sphere.center + normal * sphere.radius;
   const double signed_gap = dot(closest_on_box - point_sphere, normal);
-  return {
-      signed_gap <= 0.0,
-      std::max(0.0, signed_gap),
-      normal,
-      point_sphere,
-      closest_on_box,
-      std::move(backend_name),
-  };
+  return makeDistanceResult(
+      signed_gap <= 0.0, signed_gap, normal, point_sphere, closest_on_box, std::move(backend_name));
 }
 
 DistanceQueryResult boxBoxDistance(const ReferenceGeometry& a,
@@ -84,9 +94,11 @@ DistanceQueryResult boxBoxDistance(const ReferenceGeometry& a,
       std::max(separation.y, 0.0),
       std::max(separation.z, 0.0),
   };
-  const double distance = norm(outside);
+  const double positive_distance = norm(outside);
+
   Vec3 normal{1.0, 0.0, 0.0};
-  if (distance > 1e-12) {
+  double signed_distance = positive_distance;
+  if (positive_distance > 1e-12) {
     normal = normalized({delta.x == 0.0 ? outside.x : std::copysign(outside.x, delta.x),
                          delta.y == 0.0 ? outside.y : std::copysign(outside.y, delta.y),
                          delta.z == 0.0 ? outside.z : std::copysign(outside.z, delta.z)},
@@ -101,6 +113,7 @@ DistanceQueryResult boxBoxDistance(const ReferenceGeometry& a,
     if (penetration[2] < penetration[axis]) {
       axis = 2;
     }
+    signed_distance = -penetration[axis];
     normal = {0.0, 0.0, 0.0};
     if (axis == 0) {
       normal.x = (signed_delta[0] >= 0.0) ? 1.0 : -1.0;
@@ -113,7 +126,8 @@ DistanceQueryResult boxBoxDistance(const ReferenceGeometry& a,
 
   const Vec3 point_a = a.closestPoint(b.center - normal * b.boundingRadius());
   const Vec3 point_b = b.closestPoint(a.center + normal * a.boundingRadius());
-  return {distance <= 0.0, distance, normal, point_a, point_b, std::move(backend_name)};
+  return makeDistanceResult(
+      signed_distance <= 0.0, signed_distance, normal, point_a, point_b, std::move(backend_name));
 }
 
 DistanceQueryResult analyticDistance(const ReferenceGeometry& a,
@@ -136,6 +150,82 @@ DistanceQueryResult analyticDistance(const ReferenceGeometry& a,
   }
   return makeGenericResult(a, b, std::move(backend_name));
 }
+
+#if BASELINE_REAL_FCL_AVAILABLE
+
+fcl::Vector3d toFcl(const Vec3& value) { return {value.x, value.y, value.z}; }
+
+Vec3 fromFcl(const fcl::Vector3d& value) { return {value.x(), value.y(), value.z()}; }
+
+struct FclShapeInstance {
+  std::shared_ptr<fcl::CollisionGeometryd> geometry;
+  fcl::Transform3d transform = fcl::Transform3d::Identity();
+};
+
+std::optional<FclShapeInstance> makeFclShape(const ReferenceGeometry& geometry) {
+  FclShapeInstance shape;
+  shape.transform = fcl::Transform3d::Identity();
+  shape.transform.translation() = toFcl(geometry.center);
+
+  if (geometry.type == ShapeType::Sphere) {
+    shape.geometry = std::make_shared<fcl::Sphered>(geometry.radius);
+    return shape;
+  }
+
+  if (geometry.type == ShapeType::Box) {
+    shape.geometry = std::make_shared<fcl::Boxd>(
+        2.0 * geometry.half_extents.x, 2.0 * geometry.half_extents.y, 2.0 * geometry.half_extents.z);
+    return shape;
+  }
+
+  return std::nullopt;
+}
+
+DistanceQueryResult fclDistance(const ReferenceGeometry& a,
+                                const ReferenceGeometry& b,
+                                std::string backend_name) {
+  const auto shape_a = makeFclShape(a);
+  const auto shape_b = makeFclShape(b);
+  if (!shape_a || !shape_b) {
+    return analyticDistance(a, b, std::move(backend_name));
+  }
+
+  fcl::CollisionObjectd object_a(shape_a->geometry, shape_a->transform);
+  fcl::CollisionObjectd object_b(shape_b->geometry, shape_b->transform);
+
+  fcl::DistanceRequestd distance_request(true, true);
+  fcl::DistanceResultd distance_result;
+  const double signed_distance = fcl::distance(&object_a, &object_b, distance_request, distance_result);
+
+  fcl::CollisionRequestd collision_request(1, true);
+  fcl::CollisionResultd collision_result;
+  (void)fcl::collide(&object_a, &object_b, collision_request, collision_result);
+
+  Vec3 point_a = fromFcl(distance_result.nearest_points[0]);
+  Vec3 point_b = fromFcl(distance_result.nearest_points[1]);
+  Vec3 fallback_normal = normalized(b.center - a.center, {1.0, 0.0, 0.0});
+  Vec3 normal = normalized(point_b - point_a, fallback_normal);
+  const bool collision = collision_result.isCollision() || signed_distance <= 0.0;
+
+  if (collision_result.isCollision() && collision_result.numContacts() > 0) {
+    const auto& contact = collision_result.getContact(0);
+    normal = normalized(fromFcl(contact.normal), fallback_normal);
+    if (norm(point_b - point_a) <= 1e-10) {
+      const Vec3 contact_point = fromFcl(contact.pos);
+      point_a = contact_point - normal * (0.5 * contact.penetration_depth);
+      point_b = contact_point + normal * (0.5 * contact.penetration_depth);
+    }
+  }
+
+  if (collision && norm(point_b - point_a) <= 1e-10) {
+    point_a = a.closestPoint(b.center);
+    point_b = b.closestPoint(a.center);
+  }
+
+  return makeDistanceResult(collision, signed_distance, normal, point_a, point_b, std::move(backend_name));
+}
+
+#endif
 
 }  // namespace
 
@@ -282,20 +372,20 @@ std::string AnalyticReferenceBackend::name() const { return "analytic"; }
 
 DistanceQueryResult AnalyticReferenceBackend::distance(const ReferenceGeometry& a,
                                                        const ReferenceGeometry& b) const {
-  return analyticDistance(a, b, "analytic-fallback");
+  return analyticDistance(a, b, "analytic");
 }
 
 bool HppFclReferenceBackend::realBackendAvailable() { return BASELINE_REAL_HPP_FCL_AVAILABLE != 0; }
 
 std::string HppFclReferenceBackend::availabilitySummary() {
   if (realBackendAvailable()) {
-    return "hpp-fcl dependency detected; adapter skeleton is available and currently delegates to analytic reference geometry.";
+    return "hpp-fcl detected, but this stage still keeps it in skeleton status; the backend falls back to analytic queries.";
   }
-  return "hpp-fcl dependency not detected; backend remains a compile-time skeleton only.";
+  return "hpp-fcl not detected; backend falls back to analytic queries.";
 }
 
 std::string HppFclReferenceBackend::name() const {
-  return realBackendAvailable() ? "hppfcl-adapter-skeleton" : "hppfcl-unavailable-skeleton";
+  return realBackendAvailable() ? "hppfcl-skeleton" : "hppfcl-fallback-analytic";
 }
 
 bool HppFclReferenceBackend::available() const { return realBackendAvailable(); }
@@ -309,19 +399,23 @@ bool FclReferenceBackend::realBackendAvailable() { return BASELINE_REAL_FCL_AVAI
 
 std::string FclReferenceBackend::availabilitySummary() {
   if (realBackendAvailable()) {
-    return "FCL dependency detected; adapter skeleton is available and currently delegates to analytic reference geometry.";
+    return "FCL detected and wired through fcl::distance / fcl::collide for sphere/box primitives.";
   }
-  return "FCL dependency not detected; backend remains a compile-time skeleton only.";
+  return "FCL not detected; backend falls back to analytic queries.";
 }
 
 std::string FclReferenceBackend::name() const {
-  return realBackendAvailable() ? "fcl-adapter-skeleton" : "fcl-unavailable-skeleton";
+  return realBackendAvailable() ? "fcl-real" : "fcl-fallback-analytic";
 }
 
 bool FclReferenceBackend::available() const { return realBackendAvailable(); }
 
 DistanceQueryResult FclReferenceBackend::distance(const ReferenceGeometry& a, const ReferenceGeometry& b) const {
+#if BASELINE_REAL_FCL_AVAILABLE
+  return fclDistance(a, b, name());
+#else
   return analyticDistance(a, b, name());
+#endif
 }
 
 std::unique_ptr<ReferenceGeometryQueryEngine> makeDefaultReferenceGeometryQueryEngine() {

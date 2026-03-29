@@ -22,7 +22,9 @@ def _has_any_build() -> bool:
     for directory in [
         ROOT / "build" / "windows-release" / "bin" / "Release",
         ROOT / "build" / "windows-debug" / "bin" / "Debug",
+        ROOT / "build" / "wsl-release" / "bin" / "Release",
         ROOT / "build" / "wsl-release" / "bin",
+        ROOT / "build" / "wsl-debug" / "bin" / "Debug",
         ROOT / "build" / "wsl-debug" / "bin",
     ]:
         if directory.exists():

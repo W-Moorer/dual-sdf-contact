@@ -47,19 +47,27 @@ BackendAvailabilitySummary queryBackendAvailability() {
   summary.hppfcl_available = BASELINE_REAL_HPP_FCL_AVAILABLE != 0;
   summary.fcl_available = BASELINE_REAL_FCL_AVAILABLE != 0;
   summary.siconos_available = BASELINE_REAL_SICONOS_AVAILABLE != 0;
+  summary.sdf_backends_available.push_back("analytic");
+  summary.reference_backends_available.push_back("analytic");
+  summary.solver_backends_available.push_back("simple");
   if (summary.openvdb_available) {
+    summary.sdf_backends_available.push_back("openvdb");
     summary.real_backends.push_back("openvdb");
   }
   if (summary.nanovdb_available) {
+    summary.sdf_backends_available.push_back("nanovdb");
     summary.real_backends.push_back("nanovdb");
   }
   if (summary.hppfcl_available) {
+    summary.reference_backends_available.push_back("hppfcl");
     summary.real_backends.push_back("hppfcl");
   }
   if (summary.fcl_available) {
+    summary.reference_backends_available.push_back("fcl");
     summary.real_backends.push_back("fcl");
   }
   if (summary.siconos_available) {
+    summary.solver_backends_available.push_back("siconos");
     summary.real_backends.push_back("siconos");
   }
   return summary;
@@ -93,9 +101,9 @@ ResolvedSdfBackend resolveSdfBackend(std::string_view requested_name) {
     }
     resolved.kind = SdfBackendKind::OpenVdb;
     resolved.selected_name = "openvdb";
-    resolved.uses_fallback_execution = true;
+    resolved.uses_fallback_execution = false;
     resolved.note =
-        "OpenVDB dependency was detected. The adapter skeleton is selected, but this baseline still delegates sampling to the analytic narrow-band implementation until real grid queries are wired in.";
+        "OpenVDB dependency was detected. Real grid generation and world-space sampling are enabled for sphere/box level sets, with analytic extension outside the trusted narrow band for current primitive-backed examples.";
     return resolved;
   }
   if (token == "nanovdb") {
@@ -111,7 +119,7 @@ ResolvedSdfBackend resolveSdfBackend(std::string_view requested_name) {
     resolved.selected_name = "nanovdb";
     resolved.uses_fallback_execution = true;
     resolved.note =
-        "NanoVDB dependency was detected. The adapter skeleton is selected, but this baseline still delegates sampling to the analytic narrow-band implementation until real NanoVDB queries are wired in.";
+        "NanoVDB remains optional in this stage. The current implementation keeps it in read-only skeleton status and falls back to the analytic narrow-band path.";
     return resolved;
   }
 
@@ -150,7 +158,7 @@ ResolvedReferenceBackend resolveReferenceBackend(std::string_view requested_name
     resolved.selected_name = "hppfcl";
     resolved.uses_fallback_execution = true;
     resolved.note =
-        "hpp-fcl dependency was detected. The adapter skeleton is selected, but this baseline still delegates distance queries to analytic reference geometry until the real library calls are wired in.";
+        "hpp-fcl remains a preferred future target, but this stage keeps it in skeleton status and falls back to analytic reference geometry.";
     return resolved;
   }
   if (token == "fcl") {
@@ -164,9 +172,9 @@ ResolvedReferenceBackend resolveReferenceBackend(std::string_view requested_name
     }
     resolved.kind = ReferenceBackendKind::Fcl;
     resolved.selected_name = "fcl";
-    resolved.uses_fallback_execution = true;
+    resolved.uses_fallback_execution = false;
     resolved.note =
-        "FCL dependency was detected. The adapter skeleton is selected, but this baseline still delegates distance queries to analytic reference geometry until the real library calls are wired in.";
+        "FCL dependency was detected. Real distance/collision queries are enabled for sphere/box primitives.";
     return resolved;
   }
 
@@ -266,9 +274,15 @@ std::string buildConfigurationSummary() {
   const BackendAvailabilitySummary summary = queryBackendAvailability();
   std::ostringstream stream;
   stream << "platform track: " << summary.platform_track << "\n"
-         << "SDF backend: " << summary.default_sdf_backend << "\n"
-         << "reference backend: " << summary.default_reference_backend << "\n"
-         << "solver backend: " << summary.default_solver_backend << "\n"
+         << "SDF backend available: " << joinStrings(summary.sdf_backends_available, ", ") << "\n"
+         << "reference backend available: " << joinStrings(summary.reference_backends_available, ", ") << "\n"
+         << "solver backend available: " << joinStrings(summary.solver_backends_available, ", ") << "\n"
+         << "active default backend: sdf=" << summary.default_sdf_backend
+         << ", reference=" << summary.default_reference_backend
+         << ", solver=" << summary.default_solver_backend << "\n"
+         << "fallback enabled: sdf=" << (summary.force_fallback_sdf ? "true" : "false")
+         << ", reference=" << (summary.force_fallback_reference ? "true" : "false")
+         << ", solver=" << (summary.force_simple_solver ? "true" : "false") << "\n"
          << "real backends available: "
          << (summary.real_backends.empty() ? "none" : joinStrings(summary.real_backends, ", "));
   return stream.str();

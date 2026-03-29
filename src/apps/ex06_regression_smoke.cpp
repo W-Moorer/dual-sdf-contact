@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     auto solver = makeSolverBackend(solver_backend);
     const SolverResult result = solver->solve(problem);
 
-    const bool passed = geometry.frame.isOrthonormal() && result.iterations > 0;
+    const bool passed = geometry.frameIsOrthonormal() && result.iterations > 0;
     writeTextFile(output_dir / "smoke.txt", passed ? "PASS\n" : "FAIL\n");
 
     std::cout << example_name << ": " << (passed ? "PASS" : "FAIL")

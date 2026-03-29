@@ -1,6 +1,8 @@
 build/
 outputs/*
 !outputs/.gitkeep
+third_party/_apt/
+third_party/_deps/
 .pytest_cache/
 __pycache__/
 *.pyc

@@ -23,11 +23,15 @@ def project_root() -> Path:
 
 
 def candidate_binary_dirs(root: Path, config: str) -> list[Path]:
-    config = config or ("Release" if platform.system() == "Windows" else "")
+    config = config or "Release"
     candidates = [
         root / "build" / "windows-release" / "bin" / config,
+        root / "build" / "windows-release" / "bin",
         root / "build" / "windows-debug" / "bin" / config,
+        root / "build" / "windows-debug" / "bin",
+        root / "build" / "wsl-release" / "bin" / config,
         root / "build" / "wsl-release" / "bin",
+        root / "build" / "wsl-debug" / "bin" / config,
         root / "build" / "wsl-debug" / "bin",
         root / "build" / "bin" / config,
         root / "build" / "bin",
@@ -39,7 +43,14 @@ def resolve_executable(example: str, build_dir: Path | None, config: str) -> Pat
     executable = EXAMPLES[example] + (".exe" if platform.system() == "Windows" else "")
     search_dirs = []
     if build_dir:
-        search_dirs.extend([build_dir, build_dir / "bin", build_dir / "bin" / config])
+        search_dirs.extend(
+            [
+                build_dir,
+                build_dir / config,
+                build_dir / "bin",
+                build_dir / "bin" / config,
+            ]
+        )
     else:
         search_dirs.extend(candidate_binary_dirs(project_root(), config))
     for directory in search_dirs:

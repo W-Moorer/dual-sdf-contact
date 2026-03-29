@@ -14,6 +14,37 @@ struct Vec3 {
   double z{0.0};
 };
 
+struct Aabb3 {
+  Vec3 lower{0.0, 0.0, 0.0};
+  Vec3 upper{0.0, 0.0, 0.0};
+  bool valid{false};
+
+  bool contains(const Vec3& point, double tolerance = 0.0) const {
+    if (!valid) {
+      return false;
+    }
+    return point.x >= lower.x - tolerance && point.x <= upper.x + tolerance &&
+           point.y >= lower.y - tolerance && point.y <= upper.y + tolerance &&
+           point.z >= lower.z - tolerance && point.z <= upper.z + tolerance;
+  }
+
+  Vec3 center() const {
+    return {
+        0.5 * (lower.x + upper.x),
+        0.5 * (lower.y + upper.y),
+        0.5 * (lower.z + upper.z),
+    };
+  }
+
+  Vec3 extent() const {
+    return {
+        upper.x - lower.x,
+        upper.y - lower.y,
+        upper.z - lower.z,
+    };
+  }
+};
+
 inline Vec3 operator+(const Vec3& a, const Vec3& b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
 inline Vec3 operator-(const Vec3& a, const Vec3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 inline Vec3 operator-(const Vec3& v) { return {-v.x, -v.y, -v.z}; }
@@ -81,6 +112,12 @@ inline ContactFrame makeContactFrame(const Vec3& preferred_normal) {
   const Vec3 tangent_u = normalized(cross(helper, normal), {1.0, 0.0, 0.0});
   const Vec3 tangent_v = normalized(cross(normal, tangent_u), {0.0, 0.0, 1.0});
   return {normal, tangent_u, tangent_v};
+}
+
+inline double contactFrameOrthogonalityResidual(const ContactFrame& frame) {
+  return std::abs(dot(frame.normal, frame.tangent_u)) + std::abs(dot(frame.normal, frame.tangent_v)) +
+         std::abs(dot(frame.tangent_u, frame.tangent_v)) + std::abs(norm(frame.normal) - 1.0) +
+         std::abs(norm(frame.tangent_u) - 1.0) + std::abs(norm(frame.tangent_v) - 1.0);
 }
 
 inline std::array<double, 3> toLocal(const ContactFrame& frame, const Vec3& world) {

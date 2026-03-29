@@ -1,126 +1,170 @@
 # Migrate To WSL
 
-This document is the handoff checklist for moving the current Windows-native fallback baseline onto a future WSL2 Ubuntu 22.04 / 24.04 device.
+This document is now the stage-2 WSL status note, not a future placeholder.
 
-## What The Windows Baseline Already Gives You
+The repository has already been advanced onto a WSL2 Ubuntu path with real backend integration priorities:
 
-Already completed on the current Windows-native host:
+- real SDF backend first
+- real reference backend second
+- solver backend optional
 
-- CMake project and presets
-- fallback analytic narrow-band SDF provider
-- fallback analytic reference geometry backend
-- `SimpleCcpSolver`
-- backend factory / registry layer
-- examples with backend reporting
-- Python runner with backend flags
-- tests for backend defaults, unavailable backend handling, and example backend reporting
+## Current WSL Integration Status
 
-This means the next WSL phase should focus on replacing internals, not redesigning project structure.
+Validated on WSL2 Ubuntu 22.04:
 
-## First Steps On The Future WSL Device
+- `gcc`
+- `cmake`
+- `ninja`
+- `python3`
+- `pytest`
 
-Recommended order:
+Dependencies currently detected in the validated path:
 
-1. clone the repository into the Linux filesystem, not under `/mnt/c`
-2. run `bash scripts/bootstrap_wsl.sh`
-3. configure with `cmake --preset wsl-release`
-4. build with `cmake --build --preset wsl-release`
-5. run `bash scripts/run_all_examples_wsl.sh`
-6. inspect the configure summary to see which dependencies were detected
+- `Eigen3`
+- `OpenVDB`
+  - detected through local `libopenvdb-dev` header extraction plus system library linking
+- `FCL`
+  - detected from system package / CMake config
 
-## Recommended Install Order
+Dependencies currently not detected in the validated path:
 
-Start with the lowest-risk path and validate incrementally:
+- `NanoVDB`
+- `hpp-fcl`
+- `Siconos`
 
-1. `Eigen`
-2. `OpenVDB / NanoVDB`
-3. `hpp-fcl / FCL`
-4. optional `Siconos`
+## What Is Actually Real On WSL Now
 
-Why this order:
+Real backend paths:
 
-- `Eigen` is low risk and unblocks general math cleanup later.
-- `OpenVDB / NanoVDB` is the main SDF integration target.
-- `hpp-fcl / FCL` is the main reference backend target.
-- `Siconos` can come after geometry and SDF validation are already stable.
+1. `OpenVdbSdfProvider`
+   - real sphere / box level-set generation
+   - real world-space sampling inside the trusted narrow band
+   - explicit narrow-band handling
 
-## Recommended First Validation Set On WSL
+2. `FclReferenceBackend`
+   - real `fcl::distance`
+   - real `fcl::collide`
+   - nearest points and collision normal for primitive cases
 
-After the initial WSL build, validate in this order:
+Still optional / fallback:
 
-1. `ex01_nanovdb_hello`
-2. `ex02_hppfcl_distance`
-3. `ex03_dual_sdf_gap`
-4. `ex04_single_step_contact`
-5. `ex05_compare_backends`
-
-Reasoning:
-
-- `ex01` isolates SDF backend selection.
-- `ex02` isolates reference backend selection.
-- `ex03` checks dual-SDF contact geometry behavior.
-- `ex04` checks the solver path.
-- `ex05` checks cross-backend reporting and comparison output.
-
-## Highest-Value Modules To Replace First
-
-Prioritize these three modules:
-
-1. `SdfProvider`
-   Files:
-   - `include/baseline/sdf/openvdb_sdf_provider.h`
-   - `include/baseline/sdf/nanovdb_sdf_provider.h`
-   - `src/sdf/openvdb_sdf_provider.cpp`
-   - `src/sdf/nanovdb_sdf_provider.cpp`
-
-2. reference backend layer
-   Files:
-   - `include/baseline/contact/reference_geometry.h`
-   - `src/contact/reference_geometry.cpp`
-
-3. real dual-SDF backend validation around contact geometry
-   Files:
-   - `include/baseline/contact/dual_sdf_contact_calculator.h`
-   - `src/contact/dual_sdf_contact_calculator.cpp`
-
-These three give the biggest experimental value for the least architecture churn.
-
-## Modules That Can Wait
-
-Useful later, but not first:
-
+- `NanoVdbSdfProvider`
+- `HppFclReferenceBackend`
 - `OptionalSiconosSolver`
-- `pybind11`
-- parallel batching / pair-loop optimization
 
-Reason:
+## Examples Running On Real Backends
 
-- solver replacement is more valuable once geometry and SDF backends are already trustworthy
-- Python bindings are not required for the current subprocess-based workflow
-- parallel optimization is premature before backend correctness is validated
+Validated examples on the current WSL path:
 
-## Configure Knobs To Watch On WSL
+- `ex01_nanovdb_hello`
+  - real `OpenVDB`
+- `ex02_hppfcl_distance`
+  - real `FCL`
+- `ex03_dual_sdf_gap`
+  - analytic vs real `OpenVDB`
+- `ex04_single_step_contact`
+  - selected SDF backend can be `OpenVDB`
+  - solver remains `SimpleCcpSolver`
+- `ex05_compare_backends`
+  - analytic reference vs real `FCL`
+  - analytic SDF vs real `OpenVDB`
+- `ex06_regression_smoke`
+  - keeps the minimal end-to-end path intact
 
-Relevant options:
+## Recommended WSL Workflow
 
-- `BASELINE_WITH_OPENVDB`
-- `BASELINE_WITH_NANOVDB`
-- `BASELINE_WITH_HPP_FCL`
-- `BASELINE_WITH_FCL`
-- `BASELINE_WITH_SICONOS`
-- `BASELINE_FORCE_FALLBACK_SDF`
-- `BASELINE_FORCE_FALLBACK_REFERENCE`
-- `BASELINE_FORCE_SIMPLE_SOLVER`
+Bootstrap:
 
-On WSL, the presets already disable the force-fallback knobs.
-That means once the adapter internals are upgraded, examples can switch by configuration and factory selection instead of example rewrites.
+```bash
+bash scripts/bootstrap_wsl.sh
+```
 
-## Practical Goal For The First WSL Week
+Configure and build:
 
-Aim for this sequence:
+```bash
+bash scripts/configure_wsl.sh Release
+bash scripts/build_wsl.sh Release
+```
 
-1. keep all existing fallback tests green
-2. get one real SDF adapter wired in
-3. get one real reference backend wired in
-4. re-run `ex05_compare_backends`
-5. only then consider the optional Siconos path
+Run examples, CTest, and Python smoke:
+
+```bash
+bash scripts/run_all_examples_wsl.sh Release
+```
+
+Manual validation commands:
+
+```bash
+./build/wsl-release/bin/Release/ex01_nanovdb_hello
+./build/wsl-release/bin/Release/ex02_hppfcl_distance
+./build/wsl-release/bin/Release/ex03_dual_sdf_gap
+./build/wsl-release/bin/Release/ex05_compare_backends
+ctest --test-dir build/wsl-release --output-on-failure
+PYTHONPATH=python python3 -m pytest tests/test_python_smoke.py -q
+```
+
+## Practical Notes
+
+### OpenVDB
+
+The stage-2 implementation uses this convention:
+
+- queries are in world frame
+- voxel size is in world units
+- narrow-band width is expressed in voxel units
+- the OpenVDB transform is a linear axis-aligned world/grid map
+
+Because the current examples are primitive-backed:
+
+- inside the trusted OpenVDB band, sampling is real OpenVDB
+- outside that band, the provider explicitly falls back to the analytic primitive extension
+
+This is deliberate.
+Without that handling, center-point queries on truncated narrow-band grids would feed clipped distances into the dual-SDF formula.
+
+### FCL
+
+The current real reference backend covers:
+
+- sphere-sphere
+- sphere-box
+- box-box
+
+Unsupported shapes still fall back to the analytic backend logic.
+
+## Best Next Steps
+
+The next three modules worth spending time on are:
+
+1. `NanoVDB`
+   - add a real read-only query path from generated `OpenVDB` grids
+2. `hpp-fcl`
+   - add a real backend, then let WSL prefer it over `FCL`
+3. richer SDF assets
+   - mesh-to-level-set generation
+   - file loading
+   - benchmark cases beyond primitive pairs
+
+## What Still Should Not Be The Main Focus
+
+Not recommended as the immediate next priority:
+
+1. `Siconos`
+   - optional solver work is still lower value than geometry-layer validation
+2. pybind11 bindings
+   - the subprocess-based Python workflow is already sufficient for this stage
+3. dynamic reconstruction / streaming SDF updates
+   - not worth doing before static real-backend benchmarks are stable
+
+## Current Stage Summary
+
+The project is no longer just a Windows fallback skeleton.
+
+Stage-2 WSL now has:
+
+- real `OpenVDB` SDF support
+- real `FCL` reference support
+- upgraded benchmark-style examples
+- backend-aware tests that pass or skip cleanly
+
+The solver backend remains intentionally conservative in this phase.

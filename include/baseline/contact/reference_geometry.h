@@ -32,6 +32,7 @@ struct ReferenceGeometry {
 struct DistanceQueryResult {
   bool collision{false};
   double distance{0.0};
+  double signed_distance{0.0};
   Vec3 normal{1.0, 0.0, 0.0};
   Vec3 closest_point_a{0.0, 0.0, 0.0};
   Vec3 closest_point_b{0.0, 0.0, 0.0};

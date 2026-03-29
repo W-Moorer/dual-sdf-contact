@@ -22,6 +22,18 @@ target_include_directories(
 
 target_compile_features(baseline_core PUBLIC cxx_std_17)
 
+if(BASELINE_HAS_EIGEN)
+  target_link_libraries(baseline_core PUBLIC Eigen3::Eigen)
+endif()
+
+if(BASELINE_HAS_OPENVDB AND BASELINE_OPENVDB_TARGET)
+  target_link_libraries(baseline_core PUBLIC ${BASELINE_OPENVDB_TARGET})
+endif()
+
+if(BASELINE_HAS_FCL AND BASELINE_FCL_TARGET)
+  target_link_libraries(baseline_core PUBLIC ${BASELINE_FCL_TARGET})
+endif()
+
 if(MSVC)
   target_compile_options(baseline_core PRIVATE /W4 /permissive- /EHsc)
 else()

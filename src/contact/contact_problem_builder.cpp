@@ -4,7 +4,7 @@ namespace baseline {
 
 ContactProblem ContactProblemBuilder::build(const ContactGeometry& geometry,
                                             const SingleStepContactParams& params) const {
-  const auto local_velocity = toLocal(geometry.frame, params.relative_velocity_world);
+  const auto local_velocity = toLocal(geometry.frame(), params.relative_velocity_world);
   const double effective_inverse_mass = params.inverse_mass_a + params.inverse_mass_b;
   ContactProblem problem;
   problem.geometry = geometry;
