@@ -1,0 +1,34 @@
+{
+  "benchmark_name": "mesh_resolution_sweep",
+  "case_family": "mesh",
+  "sweep_family": "resolution_sweep",
+  "description": "Resolution and narrow-band ablation for a mesh-sphere benchmark pair.",
+  "sdf_backends": ["analytic", "openvdb"],
+  "reference_backends": ["analytic", "fcl"],
+  "solver_backends": ["simple"],
+  "voxel_sizes": [0.16, 0.08, 0.04],
+  "narrow_band_half_widths": [2.0, 4.0, 8.0],
+  "runtime_iterations": 12,
+  "enable_solver_probe": true,
+  "seed": 31,
+  "base_case": {
+    "name": "mesh_sphere_resolution_base",
+    "gap_axis": [1.0, 0.0, 0.0],
+    "a": {
+      "name": "mesh_a",
+      "type": "mesh",
+      "center": [0.0, 0.0, 0.0],
+      "rotation_rpy_deg": [15.0, 0.0, 20.0],
+      "mesh_path": "../../data/meshes/unit_octahedron.obj",
+      "mesh_scale": 0.65,
+      "mesh_recenter": true,
+      "mesh_normalize": false
+    },
+    "b": {
+      "name": "sphere_b",
+      "type": "sphere",
+      "center": [1.36, 0.06, 0.0],
+      "radius": 0.56
+    }
+  }
+}

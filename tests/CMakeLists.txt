@@ -23,6 +23,8 @@ baseline_add_test_exe(test_ex05_generates_resolved_config)
 baseline_add_test_exe(test_ex05_generates_summary_files)
 baseline_add_test_exe(test_benchmark_backend_labels_present)
 baseline_add_test_exe(test_resolution_sweep_smoke)
+baseline_add_test_exe(test_mesh_config_parse)
+baseline_add_test_exe(test_mesh_case_smoke)
 
 if(BASELINE_HAS_SICONOS)
   baseline_add_test_exe(test_siconos_backend_smoke)

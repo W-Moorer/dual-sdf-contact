@@ -17,6 +17,9 @@ struct BenchmarkShapeSpec {
   double radius{0.5};
   Vec3 rotation_rpy_deg{0.0, 0.0, 0.0};
   std::string mesh_path;
+  double mesh_scale{1.0};
+  bool mesh_recenter{false};
+  bool mesh_normalize{false};
 };
 
 struct BenchmarkCaseSpec {
@@ -28,8 +31,11 @@ struct BenchmarkCaseSpec {
 
 struct BenchmarkConfig {
   std::string benchmark_name;
+  std::string suite_name;
+  std::string run_name;
   std::string description;
   std::string case_family;
+  std::string sweep_family;
   std::vector<std::string> sdf_backends;
   std::vector<std::string> reference_backends;
   std::vector<std::string> solver_backends;
@@ -52,10 +58,19 @@ struct BenchmarkConfig {
 
 struct BenchmarkSampleSpec {
   std::string benchmark_name;
+  std::string suite_name;
+  std::string run_name;
   std::string case_family;
+  std::string sweep_family;
   std::string case_name;
   std::string sample_name;
   std::string shape_pair;
+  std::string shape_a;
+  std::string shape_b;
+  std::string mesh_a;
+  std::string mesh_b;
+  double mesh_scale_a{1.0};
+  double mesh_scale_b{1.0};
   ReferenceGeometry a;
   ReferenceGeometry b;
   double voxel_size{0.1};

@@ -1,89 +1,165 @@
 # Benchmark Plan
 
-This note captures the current benchmark coverage and the minimum paper experiment matrix supported by the repository.
+This note captures the current phase-4 benchmark coverage and the minimum paper experiment matrix supported by the repository.
 
-## Current Coverage
+## Current Paper-Minimal Matrix
 
-Current benchmark case families:
-
-- `primitive`
-  - sphere-sphere
-  - sphere-box
-  - box-box
-- `gap_sweep`
-  - separation
-  - near-contact
-  - mild penetration
-- `orientation_sweep`
-  - deterministic yaw sweep
-  - seeded random yaw samples
-- `resolution_sweep`
-  - coarse / medium / fine voxel sizes
-  - multiple narrow-band widths
-
-Current backend comparisons:
-
-- SDF
-  - `analytic`
-  - `openvdb`
-- reference
-  - `analytic`
-  - `fcl`
-- solver
-  - `simple`
-
-## Suggested Minimum Paper Matrix
-
-Recommended first-pass matrix:
+The current `paper_minimal` suite contains:
 
 1. `primitive_smoke`
-   - sanity-check backend wiring and output schema
+   - primitive correctness sanity check
+   - sphere-sphere, sphere-box, box-box
 2. `gap_sweep`
-   - use for gap error, symmetry residual, and narrow-band sensitivity
+   - primitive gap and narrow-band sensitivity
 3. `orientation_sweep`
-   - use for normal error and pose robustness
+   - primitive box-box pose stability
 4. `resolution_sweep`
-   - use for accuracy / runtime tradeoff figures
+   - primitive resolution / runtime ablation
+5. `mesh_smoke`
+   - mesh-backed correctness sanity check
+   - mesh-sphere, mesh-box
+6. `mesh_gap_sweep`
+   - mesh-backed gap and narrow-band sensitivity
+7. `mesh_resolution_sweep`
+   - mesh-backed resolution / runtime ablation
+
+## Primitive And Mesh Coverage
+
+Primitive benchmark coverage:
+
+- sphere-sphere
+- sphere-box
+- box-box
+
+Mesh benchmark coverage:
+
+- mesh-sphere
+- mesh-box
+- repository-local OBJ assets in `data/meshes/`
+  - `unit_cube.obj`
+  - `unit_octahedron.obj`
+
+Current mesh execution path:
+
+- config parse
+- triangle mesh load
+- `ReferenceGeometry` mesh-backed analytic fallback
+- OpenVDB mesh-to-level-set build
+- FCL mesh-backed distance query
+- ex05 sample / summary / report output
+
+## Main Paper Metrics
+
+Primary metrics:
+
+- `absolute_gap_error`
+- `normal_angle_error_deg`
+- `symmetry_residual`
+- `runtime_total_us_mean`
+- `runtime_total_us_p95`
+
+Primary stability diagnostics:
+
+- `invalid_result_count`
+- `degenerate_normal_count`
+- `tangent_frame_fallback_count`
+- `narrow_band_edge_hit_count`
+
+Reference and consistency metrics:
+
+- `reference_signed_distance`
+- `gap_error`
+- `relative_gap_error`
+- `point_distance_consistency`
+
+Solver-side diagnostics:
+
+- `normal_impulse`
+- `tangential_impulse_magnitude`
+- `solver_residual`
+- `solver_iterations`
+- `solver_success_rate`
 
 ## Supported Ablations
 
-Current ablations already supported:
+Backend ablations:
 
-- backend ablation
-  - `analytic` vs `openvdb`
-  - `analytic` vs `fcl`
-- voxel resolution ablation
-- narrow-band width ablation
-- pose ablation
-- gap ablation
+- `analytic` vs `openvdb` SDF
+- `analytic` vs `fcl` reference
 
-## Mesh Extension Path
+Geometry-family ablations:
 
-The config and case model already reserve a mesh path:
+- primitive vs mesh-backed benchmark cases
 
-- `BenchmarkShapeSpec.type = "mesh"`
-- `mesh_path` in config
-- dedicated `mesh` case family placeholder
+Resolution ablations:
 
-Current status:
+- coarse / medium / fine voxel sizes
 
-- parsing is present
-- execution is intentionally blocked
-- primitive cases remain the mainline until the paper baseline is stable
+Narrow-band ablations:
 
-## What To Extend Next
+- at least three half-width settings in the main sweep configs
 
-Best next extensions:
+Pose and gap ablations:
 
-1. mesh-backed `OpenVDB` generation for one or two small meshes
-2. richer suite postprocess and table export for the paper appendix
-3. stricter benchmark grouping / naming conventions if the experiment matrix grows
+- deterministic orientation sweep
+- seeded random pose samples
+- separation / near-contact / mild penetration
 
-## What Not To Prioritize Yet
+## Current Table And Plot Export
 
-Not recommended as the immediate next step:
+The suite postprocess currently exports:
 
-- `Siconos`
-- GUI
-- large-scale parallel benchmarking
-- deep `hpp-fcl` work while `FCL` already supports the primitive paper path
+- `aggregate_summary.csv`
+- `aggregate_summary.json`
+- `aggregate_table.md`
+- `paper_table_accuracy.csv`
+- `paper_table_accuracy.md`
+- `paper_table_efficiency.csv`
+- `paper_table_efficiency.md`
+- `paper_table_ablation.csv`
+- `paper_table_ablation.md`
+- `plot_gap_vs_resolution.csv`
+- `plot_runtime_vs_resolution.csv`
+- `plot_symmetry_vs_bandwidth.csv`
+
+These outputs are intended to be stable enough for:
+
+- manual paper table drafting
+- Python plotting scripts outside the repo
+- appendix-style result inspection
+
+## Recommended First Figures And Tables
+
+Most useful immediate paper artifacts:
+
+1. Accuracy table
+   - use `paper_table_accuracy.csv`
+   - highlight `absolute_gap_error`, `normal_angle_error_deg`, `symmetry_residual`
+2. Efficiency table
+   - use `paper_table_efficiency.csv`
+   - highlight `dual_sdf_runtime_us_mean`, `runtime_total_us_mean`, `runtime_total_us_p95`
+3. Resolution figure
+   - use `plot_gap_vs_resolution.csv`
+   - pair with `plot_runtime_vs_resolution.csv`
+4. Narrow-band stability figure
+   - use `plot_symmetry_vs_bandwidth.csv`
+
+## Suggested Next Extensions
+
+Most valuable next steps after the current phase:
+
+1. richer mesh asset coverage
+   - a second non-convex but lightweight mesh
+   - one more paper-friendly mesh-box pose sweep
+2. more explicit benchmark naming conventions for larger suites
+3. small plotting helpers tailored to the final paper figure set
+
+## Not The Current Priority
+
+Still not recommended as the immediate next step:
+
+- deep `Siconos` integration
+- `NanoVDB` mainline query path
+- replacing `FCL` with `hpp-fcl`
+- GUI or interactive visualization
+- large-scale parallel benchmark infrastructure

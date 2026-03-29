@@ -28,21 +28,19 @@ int main() {
   using namespace baseline;
 
   const auto executable = findExecutable("ex05_compare_backends");
-  const auto config_path = sourceDir() / "configs" / "benchmarks" / "primitive_smoke.json";
-  const auto output_root = sourceDir() / "outputs" / "test_benchmark_backend_labels_present";
+  const auto config_path = sourceDir() / "configs" / "benchmarks" / "mesh_smoke.json";
+  const auto output_root = sourceDir() / "outputs" / "test_mesh_case_smoke";
   const std::string command = "\"" + executable.string() + "\" --config \"" + config_path.string() +
                               "\" --output-dir \"" + output_root.string() + "\"";
   if (std::system(command.c_str()) != 0) {
-    std::cerr << "Failed to run ex05_compare_backends.\n";
+    std::cerr << "Failed to run ex05_compare_backends for mesh_smoke.\n";
     return 1;
   }
 
-  const auto samples_csv = output_root / "primitive_smoke" / "samples.csv";
-  const std::string content = readTextFile(samples_csv);
-  if (content.find("sdf_backend") == std::string::npos || content.find("reference_backend") == std::string::npos ||
-      content.find("solver_backend") == std::string::npos || content.find("suite_name") == std::string::npos ||
-      content.find("shape_a") == std::string::npos) {
-    std::cerr << "samples.csv missing backend or benchmark labels.\n";
+  const auto summary_csv = output_root / "mesh_smoke" / "summary.csv";
+  const std::string content = readTextFile(summary_csv);
+  if (content.find("mesh") == std::string::npos || content.find("unit_cube.obj") == std::string::npos) {
+    std::cerr << "mesh_smoke summary.csv is missing expected mesh labels.\n";
     return 1;
   }
   return 0;

@@ -7,7 +7,8 @@ int main() {
   using namespace baseline;
 
   const auto primitive_config = loadBenchmarkConfig(sourceDir() / "configs" / "benchmarks" / "primitive_smoke.json");
-  if (primitive_config.benchmark_name != "primitive_smoke" || primitive_config.case_family != "primitive") {
+  if (primitive_config.benchmark_name != "primitive_smoke" || primitive_config.case_family != "primitive" ||
+      primitive_config.sweep_family != "primitive") {
     std::cerr << "Failed to parse primitive_smoke benchmark config.\n";
     return 1;
   }
@@ -17,7 +18,7 @@ int main() {
   }
 
   const auto resolution_config = loadBenchmarkConfig(sourceDir() / "configs" / "benchmarks" / "resolution_sweep.json");
-  if (resolution_config.case_family != "resolution_sweep") {
+  if (resolution_config.case_family != "primitive" || resolution_config.sweep_family != "resolution_sweep") {
     std::cerr << "Failed to parse resolution_sweep benchmark config.\n";
     return 1;
   }

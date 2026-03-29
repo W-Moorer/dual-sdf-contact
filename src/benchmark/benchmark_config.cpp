@@ -8,6 +8,7 @@
 
 #include "baseline/core/io_utils.h"
 #include "baseline/core/simple_json.h"
+#include "baseline/mesh/triangle_mesh.h"
 
 namespace baseline {
 
@@ -77,6 +78,17 @@ std::optional<int> optionalIntField(const JsonValue& object, std::string_view fi
     throw BenchmarkConfigError("Config field must be a number: " + std::string(field));
   }
   return static_cast<int>(std::lround(value.asNumber()));
+}
+
+std::optional<bool> optionalBoolField(const JsonValue& object, std::string_view field) {
+  if (!object.isObject() || !object.hasKey(field)) {
+    return std::nullopt;
+  }
+  const JsonValue& value = object.at(field);
+  if (!value.isBool()) {
+    throw BenchmarkConfigError("Config field must be a boolean: " + std::string(field));
+  }
+  return value.asBool();
 }
 
 std::optional<double> optionalNumberField(const JsonValue& object, std::string_view field) {
@@ -149,7 +161,7 @@ std::vector<double> optionalNumberArrayField(const JsonValue& object, std::strin
   return requireNumberArrayField(object, field);
 }
 
-BenchmarkShapeSpec parseShapeSpec(const JsonValue& value) {
+BenchmarkShapeSpec parseShapeSpec(const JsonValue& value, const std::filesystem::path& base_dir) {
   if (!value.isObject()) {
     throw BenchmarkConfigError("Shape spec must be an object.");
   }
@@ -165,37 +177,38 @@ BenchmarkShapeSpec parseShapeSpec(const JsonValue& value) {
   } else if (spec.type == "box") {
     spec.half_extents = requireVec3Field(value, "half_extents");
   } else if (spec.type == "mesh") {
-    spec.mesh_path = requireStringField(value, "mesh_path");
+    const std::filesystem::path mesh_path = requireStringField(value, "mesh_path");
+    spec.mesh_path = (mesh_path.is_absolute() ? mesh_path : (base_dir / mesh_path)).lexically_normal().generic_string();
+    spec.mesh_scale = optionalNumberField(value, "mesh_scale").value_or(1.0);
+    spec.mesh_recenter = optionalBoolField(value, "mesh_recenter").value_or(false);
+    spec.mesh_normalize = optionalBoolField(value, "mesh_normalize").value_or(false);
   } else {
     throw BenchmarkConfigError("Unsupported shape type in benchmark config: " + spec.type);
   }
   return spec;
 }
 
-BenchmarkCaseSpec parseCaseSpec(const JsonValue& value) {
+BenchmarkCaseSpec parseCaseSpec(const JsonValue& value, const std::filesystem::path& base_dir) {
   if (!value.isObject()) {
     throw BenchmarkConfigError("Benchmark case spec must be an object.");
   }
   BenchmarkCaseSpec spec;
   spec.name = requireStringField(value, "name");
-  spec.a = parseShapeSpec(requireObjectField(value, "a"));
-  spec.b = parseShapeSpec(requireObjectField(value, "b"));
+  spec.a = parseShapeSpec(requireObjectField(value, "a"), base_dir);
+  spec.b = parseShapeSpec(requireObjectField(value, "b"), base_dir);
   if (const auto gap_axis = optionalVec3Field(value, "gap_axis")) {
     spec.gap_axis = normalized(*gap_axis, {1.0, 0.0, 0.0});
   }
   return spec;
 }
 
-std::string shapeTypeLabel(const ReferenceGeometry& geometry) {
-  switch (geometry.type) {
-    case ShapeType::Sphere:
-      return "sphere";
-    case ShapeType::Box:
-      return "box";
-    case ShapeType::Plane:
-      return "plane";
+std::string shapeTypeLabel(const BenchmarkShapeSpec& spec) { return spec.type; }
+
+std::string meshLabel(const BenchmarkShapeSpec& spec) {
+  if (spec.type != "mesh" || spec.mesh_path.empty()) {
+    return "";
   }
-  return "unknown";
+  return std::filesystem::path(spec.mesh_path).filename().generic_string();
 }
 
 ReferenceGeometry buildGeometry(const BenchmarkShapeSpec& spec, const Mat3& extra_rotation = identityMat3()) {
@@ -206,7 +219,14 @@ ReferenceGeometry buildGeometry(const BenchmarkShapeSpec& spec, const Mat3& extr
   if (spec.type == "box") {
     return ReferenceGeometry::makeBox(spec.name, spec.center, spec.half_extents, rotation);
   }
-  throw BenchmarkConfigError("Mesh-backed cases are not wired into the current benchmark execution path yet.");
+  if (spec.type == "mesh") {
+    TriangleMeshLoadOptions options;
+    options.scale = spec.mesh_scale;
+    options.recenter = spec.mesh_recenter;
+    options.normalize = spec.mesh_normalize;
+    return ReferenceGeometry::makeMesh(spec.name, spec.center, loadTriangleMeshShared(spec.mesh_path, options), rotation);
+  }
+  throw BenchmarkConfigError("Unsupported shape type in benchmark execution path: " + spec.type);
 }
 
 double caseSignedDistance(const ReferenceGeometry& a, const ReferenceGeometry& b) {
@@ -309,6 +329,9 @@ JsonValue shapeSpecValue(const BenchmarkShapeSpec& spec) {
     value["half_extents"] = vec3Value(spec.half_extents);
   } else if (spec.type == "mesh") {
     value["mesh_path"] = JsonValue(spec.mesh_path);
+    value["mesh_scale"] = JsonValue(spec.mesh_scale);
+    value["mesh_recenter"] = JsonValue(spec.mesh_recenter);
+    value["mesh_normalize"] = JsonValue(spec.mesh_normalize);
   }
   return value;
 }
@@ -350,10 +373,14 @@ BenchmarkSampleSpec makeSample(const BenchmarkConfig& config,
                                const Vec3& orientation_axis) {
   BenchmarkSampleSpec sample;
   sample.benchmark_name = config.benchmark_name;
+  sample.suite_name = config.suite_name;
+  sample.run_name = config.run_name;
   sample.case_family = config.case_family;
+  sample.sweep_family = config.sweep_family;
   sample.case_name = case_spec.name;
-  sample.sample_name = case_spec.name + "_vs" + formatDouble(voxel_size, 3) + "_nb" +
-                       formatDouble(narrow_band_half_width, 1) + "_i" + std::to_string(sample_index);
+  sample.sample_name = case_spec.name + "_vx" + formatDouble(voxel_size, 3) + "_nb" +
+                       formatDouble(narrow_band_half_width, 1) + "_gap" + formatDouble(requested_gap, 3) +
+                       "_rot" + formatDouble(orientation_angle_deg, 1) + "_i" + std::to_string(sample_index);
   sample.a = buildGeometry(case_spec.a);
   sample.b = buildGeometry(case_spec.b);
   if (std::abs(orientation_angle_deg) > 1e-12) {
@@ -363,7 +390,13 @@ BenchmarkSampleSpec makeSample(const BenchmarkConfig& config,
       sample.b = rotatedGeometry(case_spec.b, orientation_axis, orientation_angle_deg);
     }
   }
-  sample.shape_pair = shapeTypeLabel(sample.a) + "-" + shapeTypeLabel(sample.b);
+  sample.shape_a = shapeTypeLabel(case_spec.a);
+  sample.shape_b = shapeTypeLabel(case_spec.b);
+  sample.mesh_a = meshLabel(case_spec.a);
+  sample.mesh_b = meshLabel(case_spec.b);
+  sample.mesh_scale_a = case_spec.a.mesh_scale;
+  sample.mesh_scale_b = case_spec.b.mesh_scale;
+  sample.shape_pair = sample.shape_a + "-" + sample.shape_b;
   sample.voxel_size = voxel_size;
   sample.narrow_band_half_width = narrow_band_half_width;
   sample.requested_gap = requested_gap;
@@ -385,8 +418,11 @@ BenchmarkConfig loadBenchmarkConfig(const std::filesystem::path& path) {
 
   BenchmarkConfig config;
   config.benchmark_name = requireStringField(root, "benchmark_name");
+  config.suite_name = optionalStringField(root, "suite_name").value_or("standalone");
+  config.run_name = optionalStringField(root, "run_name").value_or(config.benchmark_name);
   config.description = optionalStringField(root, "description").value_or("");
   config.case_family = requireStringField(root, "case_family");
+  config.sweep_family = optionalStringField(root, "sweep_family").value_or(config.case_family);
   config.sdf_backends = requireStringArrayField(root, "sdf_backends");
   config.reference_backends = requireStringArrayField(root, "reference_backends");
   config.solver_backends = requireStringArrayField(root, "solver_backends");
@@ -395,9 +431,10 @@ BenchmarkConfig loadBenchmarkConfig(const std::filesystem::path& path) {
   config.runtime_iterations = static_cast<int>(std::lround(requireNumberField(root, "runtime_iterations")));
   config.enable_solver_probe = requireBoolField(root, "enable_solver_probe");
   config.seed = static_cast<int>(std::lround(requireNumberField(root, "seed")));
+  const std::filesystem::path config_base_dir = path.parent_path();
 
   if (root.hasKey("base_case")) {
-    config.base_case = parseCaseSpec(root.at("base_case"));
+    config.base_case = parseCaseSpec(root.at("base_case"), config_base_dir);
     config.has_base_case = true;
   }
   if (root.hasKey("primitive_cases")) {
@@ -406,7 +443,7 @@ BenchmarkConfig loadBenchmarkConfig(const std::filesystem::path& path) {
       throw BenchmarkConfigError("primitive_cases must be an array.");
     }
     for (const JsonValue& value : primitive_cases.asArray()) {
-      config.primitive_cases.push_back(parseCaseSpec(value));
+      config.primitive_cases.push_back(parseCaseSpec(value, config_base_dir));
     }
   }
   config.gap_values = optionalNumberArrayField(root, "gap_values");
@@ -421,15 +458,34 @@ BenchmarkConfig loadBenchmarkConfig(const std::filesystem::path& path) {
   config.random_orientation_min_deg = optionalNumberField(root, "random_orientation_min_deg").value_or(-180.0);
   config.random_orientation_max_deg = optionalNumberField(root, "random_orientation_max_deg").value_or(180.0);
 
-  if (config.case_family == "primitive") {
+  const bool contains_mesh = benchmarkConfigUsesMesh(config);
+  if (config.case_family != "primitive" && config.case_family != "mesh") {
+    config.sweep_family = config.case_family;
+    config.case_family = contains_mesh ? "mesh" : "primitive";
+  }
+  if (config.sweep_family == "mesh") {
+    config.sweep_family = "primitive";
+  }
+
+  if (config.case_family != "primitive" && config.case_family != "mesh") {
+    throw BenchmarkConfigError("case_family must resolve to primitive or mesh.");
+  }
+  if (config.case_family == "primitive" && contains_mesh) {
+    throw BenchmarkConfigError("primitive case_family cannot include mesh shapes.");
+  }
+  if (config.case_family == "mesh" && !contains_mesh) {
+    throw BenchmarkConfigError("mesh case_family requires at least one mesh shape.");
+  }
+
+  if (config.sweep_family == "primitive") {
     if (config.primitive_cases.empty()) {
-      throw BenchmarkConfigError("primitive case_family requires primitive_cases.");
+      throw BenchmarkConfigError("primitive sweep_family requires primitive_cases.");
     }
-  } else if (config.case_family == "gap_sweep") {
+  } else if (config.sweep_family == "gap_sweep") {
     if (!config.has_base_case || config.gap_values.empty()) {
       throw BenchmarkConfigError("gap_sweep requires base_case and gap_values.");
     }
-  } else if (config.case_family == "orientation_sweep") {
+  } else if (config.sweep_family == "orientation_sweep") {
     if (!config.has_base_case) {
       throw BenchmarkConfigError("orientation_sweep requires base_case.");
     }
@@ -437,16 +493,12 @@ BenchmarkConfig loadBenchmarkConfig(const std::filesystem::path& path) {
       throw BenchmarkConfigError(
           "orientation_sweep requires orientation_yaw_degrees and/or random_orientation_count.");
     }
-  } else if (config.case_family == "resolution_sweep") {
+  } else if (config.sweep_family == "resolution_sweep") {
     if (!config.has_base_case) {
       throw BenchmarkConfigError("resolution_sweep requires base_case.");
     }
-  } else if (config.case_family == "mesh") {
-    if (!config.has_base_case) {
-      throw BenchmarkConfigError("mesh case_family requires base_case.");
-    }
   } else {
-    throw BenchmarkConfigError("Unsupported case_family: " + config.case_family);
+    throw BenchmarkConfigError("Unsupported sweep_family: " + config.sweep_family);
   }
 
   return config;
@@ -455,32 +507,24 @@ BenchmarkConfig loadBenchmarkConfig(const std::filesystem::path& path) {
 ReferenceGeometry makeGeometryFromShapeSpec(const BenchmarkShapeSpec& spec) { return buildGeometry(spec); }
 
 std::vector<BenchmarkSampleSpec> expandBenchmarkSamples(const BenchmarkConfig& config) {
-  if (benchmarkConfigUsesMesh(config)) {
-    throw BenchmarkConfigError(
-        "Mesh-backed benchmark cases are parsed but not executable in the current stage. Keep primitive configs on the main path.");
-  }
-
   std::vector<BenchmarkCaseSpec> structural_cases;
   std::vector<double> orientation_values;
   double requested_gap = 0.0;
 
-  if (config.case_family == "primitive") {
+  if (config.sweep_family == "primitive") {
     structural_cases = config.primitive_cases;
     orientation_values = {0.0};
-  } else if (config.case_family == "gap_sweep") {
+  } else if (config.sweep_family == "gap_sweep") {
     orientation_values = {0.0};
     for (double target_gap : config.gap_values) {
       BenchmarkCaseSpec adjusted = withTargetGap(config.base_case, target_gap);
       adjusted.name = config.base_case.name + "_gap_" + formatDouble(target_gap, 3);
       structural_cases.push_back(std::move(adjusted));
     }
-  } else if (config.case_family == "orientation_sweep") {
+  } else if (config.sweep_family == "orientation_sweep") {
     structural_cases = {config.base_case};
     orientation_values = generateOrientationAngles(config);
-  } else if (config.case_family == "resolution_sweep") {
-    structural_cases = {config.base_case};
-    orientation_values = {0.0};
-  } else if (config.case_family == "mesh") {
+  } else if (config.sweep_family == "resolution_sweep") {
     structural_cases = {config.base_case};
     orientation_values = {0.0};
   }
@@ -492,8 +536,9 @@ std::vector<BenchmarkSampleSpec> expandBenchmarkSamples(const BenchmarkConfig& c
   std::vector<BenchmarkSampleSpec> samples;
   int sample_index = 0;
   for (const BenchmarkCaseSpec& case_spec : structural_cases) {
-    const double case_gap = (config.case_family == "gap_sweep") ? caseSignedDistance(buildGeometry(case_spec.a), buildGeometry(case_spec.b))
-                                                                : requested_gap;
+    const double case_gap = (config.sweep_family == "gap_sweep")
+                                ? caseSignedDistance(buildGeometry(case_spec.a), buildGeometry(case_spec.b))
+                                : requested_gap;
     for (double orientation_angle_deg : orientation_values) {
       for (double voxel_size : config.voxel_sizes) {
         for (double narrow_band_half_width : config.narrow_band_half_widths) {
@@ -520,10 +565,13 @@ std::string benchmarkConfigToJson(const BenchmarkConfig& config) {
       {"enable_solver_probe", config.enable_solver_probe},
       {"narrow_band_half_widths", numberArrayValue(config.narrow_band_half_widths)},
       {"reference_backends", stringArrayValue(config.reference_backends)},
+      {"run_name", config.run_name},
       {"runtime_iterations", config.runtime_iterations},
       {"sdf_backends", stringArrayValue(config.sdf_backends)},
       {"seed", config.seed},
       {"solver_backends", stringArrayValue(config.solver_backends)},
+      {"suite_name", config.suite_name},
+      {"sweep_family", config.sweep_family},
       {"voxel_sizes", numberArrayValue(config.voxel_sizes)},
   };
   if (config.has_base_case) {
@@ -552,7 +600,8 @@ std::string benchmarkConfigToJson(const BenchmarkConfig& config) {
 
 std::string benchmarkConfigSummary(const BenchmarkConfig& config) {
   std::ostringstream stream;
-  stream << "benchmark=" << config.benchmark_name << " case_family=" << config.case_family
+  stream << "suite=" << config.suite_name << " run=" << config.run_name << " benchmark=" << config.benchmark_name
+         << " case_family=" << config.case_family << " sweep_family=" << config.sweep_family
          << " sdf=" << joinWithDelimiter(config.sdf_backends, "+")
          << " reference=" << joinWithDelimiter(config.reference_backends, "+")
          << " solver=" << joinWithDelimiter(config.solver_backends, "+")

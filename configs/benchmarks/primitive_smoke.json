@@ -1,6 +1,7 @@
 {
   "benchmark_name": "primitive_smoke",
   "case_family": "primitive",
+  "sweep_family": "primitive",
   "description": "Primitive smoke matrix for paper-track backend comparisons.",
   "sdf_backends": ["analytic", "openvdb"],
   "reference_backends": ["analytic", "fcl"],

@@ -38,6 +38,8 @@ using JsonValue = baseline::json::Value;
 struct BenchmarkOptions {
   std::string config_path;
   std::string case_family_override;
+  std::string suite_name;
+  std::string run_name;
   std::string sdf_backend;
   std::string reference_backend;
   std::string solver_backend;
@@ -49,11 +51,18 @@ struct BenchmarkOptions {
 struct SampleRecord {
   std::string timestamp_utc;
   std::string benchmark_name;
+  std::string suite_name;
+  std::string run_name;
   std::string config_summary;
   std::string case_family;
+  std::string sweep_family;
   std::string case_name;
   std::string sample_name;
   std::string shape_pair;
+  std::string shape_a;
+  std::string shape_b;
+  std::string mesh_a;
+  std::string mesh_b;
   std::string sdf_backend;
   std::string sdf_provider_backend;
   std::string reference_backend;
@@ -62,6 +71,8 @@ struct SampleRecord {
   std::string solver_name;
   double voxel_size{0.0};
   double narrow_band_half_width{0.0};
+  double mesh_scale_a{1.0};
+  double mesh_scale_b{1.0};
   int seed{0};
   double requested_gap{0.0};
   double orientation_angle_deg{0.0};
@@ -144,6 +155,10 @@ BenchmarkOptions parseOptions(int argc, char** argv) {
       options.config_path = require_value(argument);
     } else if (argument == "--case-family") {
       options.case_family_override = require_value(argument);
+    } else if (argument == "--suite-name") {
+      options.suite_name = require_value(argument);
+    } else if (argument == "--run-name") {
+      options.run_name = require_value(argument);
     } else if (argument == "--output-dir") {
       options.output_dir = require_value(argument);
     } else if (argument == "--seed") {
@@ -164,7 +179,9 @@ BenchmarkOptions parseOptions(int argc, char** argv) {
 void printUsage() {
   std::cout << "ex05_compare_backends"
                " [--config path]"
-               " [--case-family primitive|gap_sweep|orientation_sweep|resolution_sweep|mesh]"
+               " [--case-family primitive|mesh]"
+               " [--suite-name name]"
+               " [--run-name name]"
                " [--output-dir path]"
                " [--seed N]"
                " [--sdf-backend analytic|openvdb|nanovdb]"
@@ -177,6 +194,20 @@ std::vector<std::string> singleOrOriginal(const std::vector<std::string>& values
     return {override_value};
   }
   return values;
+}
+
+std::string joinOrNone(const std::vector<std::string>& values) {
+  if (values.empty()) {
+    return "none";
+  }
+  std::ostringstream stream;
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    if (index > 0) {
+      stream << "+";
+    }
+    stream << values[index];
+  }
+  return stream.str();
 }
 
 std::vector<ResolvedSdfBackend> resolveSdfBackends(const std::vector<std::string>& requested,
@@ -289,6 +320,10 @@ JsonValue sampleRecordValue(const SampleRecord& record) {
       {"gap_error", record.gap_error},
       {"gradient_consistent_flag", record.gradient_consistent_flag},
       {"invalid_result_count", record.invalid_result_count},
+      {"mesh_a", record.mesh_a},
+      {"mesh_b", record.mesh_b},
+      {"mesh_scale_a", record.mesh_scale_a},
+      {"mesh_scale_b", record.mesh_scale_b},
       {"narrow_band_edge_hit_count", record.narrow_band_edge_hit_count},
       {"narrow_band_half_width", record.narrow_band_half_width},
       {"normal_angle_error_deg", record.normal_angle_error_deg},
@@ -304,6 +339,7 @@ JsonValue sampleRecordValue(const SampleRecord& record) {
       {"reference_signed_distance", record.reference_signed_distance},
       {"relative_gap_error", record.relative_gap_error},
       {"requested_gap", record.requested_gap},
+      {"run_name", record.run_name},
       {"runtime_total_us", record.runtime_total_us},
       {"sample_name", record.sample_name},
       {"sdf_backend", record.sdf_backend},
@@ -311,6 +347,8 @@ JsonValue sampleRecordValue(const SampleRecord& record) {
       {"sdf_normal_angle_error_vs_analytic_deg", record.sdf_normal_angle_error_vs_analytic_deg},
       {"sdf_provider_backend", record.sdf_provider_backend},
       {"seed", record.seed},
+      {"shape_a", record.shape_a},
+      {"shape_b", record.shape_b},
       {"shape_pair", record.shape_pair},
       {"signed_gap", record.signed_gap},
       {"solver_backend", record.solver_backend},
@@ -319,6 +357,8 @@ JsonValue sampleRecordValue(const SampleRecord& record) {
       {"solver_residual", record.solver_residual},
       {"solver_runtime_us", record.solver_runtime_us},
       {"solver_success_flag", record.solver_success_flag},
+      {"suite_name", record.suite_name},
+      {"sweep_family", record.sweep_family},
       {"symmetry_residual", record.symmetry_residual},
       {"tangent_frame_fallback_count", record.tangent_frame_fallback_count},
       {"tangent_orthogonality_residual", record.tangent_orthogonality_residual},
@@ -348,6 +388,12 @@ int main(int argc, char** argv) {
     BenchmarkConfig config = loadBenchmarkConfig(config_path);
     if (!options.case_family_override.empty()) {
       config.case_family = options.case_family_override;
+    }
+    if (!options.suite_name.empty()) {
+      config.suite_name = options.suite_name;
+    }
+    if (!options.run_name.empty()) {
+      config.run_name = options.run_name;
     }
     if (options.seed_override.has_value()) {
       config.seed = *options.seed_override;
@@ -439,11 +485,20 @@ int main(int argc, char** argv) {
             SampleRecord record;
             record.timestamp_utc = utcTimestampNow();
             record.benchmark_name = config.benchmark_name;
+            record.suite_name = sample.suite_name;
+            record.run_name = sample.run_name;
             record.config_summary = benchmarkConfigSummary(config);
-            record.case_family = config.case_family;
+            record.case_family = sample.case_family;
+            record.sweep_family = sample.sweep_family;
             record.case_name = sample.case_name;
             record.sample_name = sample.sample_name;
             record.shape_pair = sample.shape_pair;
+            record.shape_a = sample.shape_a;
+            record.shape_b = sample.shape_b;
+            record.mesh_a = sample.mesh_a;
+            record.mesh_b = sample.mesh_b;
+            record.mesh_scale_a = sample.mesh_scale_a;
+            record.mesh_scale_b = sample.mesh_scale_b;
             record.sdf_backend = sdf_backend.selected_name;
             record.sdf_provider_backend = sdf_a->backendName();
             record.reference_backend = reference_backend.selected_name;
@@ -510,11 +565,20 @@ int main(int argc, char** argv) {
     for (const SampleRecord& record : records) {
       sample_rows.push_back({
           record.timestamp_utc,
+          record.suite_name,
+          record.run_name,
           record.benchmark_name,
           record.case_family,
+          record.sweep_family,
           record.case_name,
           record.sample_name,
+          record.shape_a,
+          record.shape_b,
           record.shape_pair,
+          record.mesh_a,
+          record.mesh_b,
+          formatDouble(record.mesh_scale_a),
+          formatDouble(record.mesh_scale_b),
           record.sdf_backend,
           record.sdf_provider_backend,
           record.reference_backend,
@@ -560,27 +624,29 @@ int main(int argc, char** argv) {
 
     apps::writeCsv(
         benchmark_output_dir / "samples.csv",
-        {"timestamp_utc",       "benchmark_name",          "case_family",         "case_name",
-         "sample_name",         "shape_pair",              "sdf_backend",         "sdf_provider_backend",
-         "reference_backend",   "reference_engine_name",   "solver_backend",      "solver_name",
-         "voxel_size",          "narrow_band_half_width",  "seed",                "requested_gap",
-         "orientation_angle_deg", "analytic_reference_signed_distance", "reference_signed_distance",
-         "analytic_signed_gap", "signed_gap", "gap_error", "absolute_gap_error", "relative_gap_error",
-         "sdf_gap_error_vs_analytic", "reference_gap_error_vs_analytic", "normal_angle_error_deg",
+        {"timestamp_utc", "suite_name", "run_name", "benchmark_name", "case_family", "sweep_family", "case_name",
+         "sample_name", "shape_a", "shape_b", "shape_pair", "mesh_a", "mesh_b", "mesh_scale_a", "mesh_scale_b",
+         "sdf_backend", "sdf_provider_backend", "reference_backend", "reference_engine_name", "solver_backend",
+         "solver_name", "voxel_size", "narrow_band_half_width", "seed", "requested_gap", "orientation_angle_deg",
+         "analytic_reference_signed_distance", "reference_signed_distance", "analytic_signed_gap", "signed_gap",
+         "gap_error", "absolute_gap_error", "relative_gap_error", "sdf_gap_error_vs_analytic",
+         "reference_gap_error_vs_analytic", "normal_angle_error_deg",
          "sdf_normal_angle_error_vs_analytic_deg", "reference_normal_angle_error_vs_analytic_deg",
-         "symmetry_residual",
-         "tangent_orthogonality_residual", "point_distance_consistency", "invalid_result_count",
-         "degenerate_normal_count", "tangent_frame_fallback_count", "narrow_band_edge_hit_count",
-         "reference_runtime_us", "dual_sdf_runtime_us",    "solver_runtime_us",   "runtime_total_us",
-         "normal_impulse",      "tangential_impulse_magnitude", "solver_residual", "solver_iterations",
-         "solver_success_flag"},
+         "symmetry_residual", "tangent_orthogonality_residual", "point_distance_consistency",
+         "invalid_result_count", "degenerate_normal_count", "tangent_frame_fallback_count",
+         "narrow_band_edge_hit_count", "reference_runtime_us", "dual_sdf_runtime_us", "solver_runtime_us",
+         "runtime_total_us", "normal_impulse", "tangential_impulse_magnitude", "solver_residual",
+         "solver_iterations", "solver_success_flag"},
         sample_rows);
 
     std::map<std::string, std::vector<const SampleRecord*>> grouped_records;
     for (const SampleRecord& record : records) {
-      const std::string key = record.case_family + "|" + record.case_name + "|" + record.shape_pair + "|" +
+      const std::string key = record.suite_name + "|" + record.run_name + "|" + record.benchmark_name + "|" +
+                              record.case_family + "|" + record.sweep_family + "|" + record.case_name + "|" +
+                              record.shape_pair + "|" + record.mesh_a + "|" + record.mesh_b + "|" +
                               record.sdf_backend + "|" + record.reference_backend + "|" + record.solver_backend + "|" +
-                              formatDouble(record.voxel_size) + "|" + formatDouble(record.narrow_band_half_width);
+                              formatDouble(record.voxel_size) + "|" + formatDouble(record.narrow_band_half_width) +
+                              "|" + std::to_string(record.seed);
       grouped_records[key].push_back(&record);
     }
 
@@ -588,9 +654,31 @@ int main(int argc, char** argv) {
     JsonValue::Array summary_json_rows;
     std::ostringstream report;
     report << "# " << config.benchmark_name << "\n\n"
+           << "## Benchmark\n\n"
+           << "- Suite: `" << config.suite_name << "`\n"
+           << "- Run: `" << config.run_name << "`\n"
            << "- Case family: `" << config.case_family << "`\n"
+           << "- Sweep family: `" << config.sweep_family << "`\n"
            << "- Config summary: `" << benchmarkConfigSummary(config) << "`\n"
            << "- Samples: `" << records.size() << "`\n";
+    report << "- Active backends:\n"
+           << "  - SDF: `" << joinOrNone(config.sdf_backends) << "`\n"
+           << "  - Reference: `" << joinOrNone(config.reference_backends) << "`\n"
+           << "  - Solver: `" << joinOrNone(config.solver_backends) << "`\n";
+    report << "\n## Cases\n\n";
+    std::map<std::string, const BenchmarkSampleSpec*> unique_cases;
+    for (const BenchmarkSampleSpec& sample : samples) {
+      unique_cases.emplace(sample.case_name, &sample);
+    }
+    for (const auto& [case_name, sample_ptr] : unique_cases) {
+      const BenchmarkSampleSpec& sample = *sample_ptr;
+      report << "- `" << case_name << "`: `" << sample.shape_a << "-" << sample.shape_b << "`";
+      if (!sample.mesh_a.empty() || !sample.mesh_b.empty()) {
+        report << " (`mesh_a=" << (sample.mesh_a.empty() ? "-" : sample.mesh_a) << "`, `mesh_b="
+               << (sample.mesh_b.empty() ? "-" : sample.mesh_b) << "`)";
+      }
+      report << "\n";
+    }
     if (!skipped_backend_notes.empty()) {
       report << "- Skipped backends: ";
       for (std::size_t index = 0; index < skipped_backend_notes.size(); ++index) {
@@ -671,15 +759,25 @@ int main(int argc, char** argv) {
           static_cast<double>(solver_success_count) / static_cast<double>(values.size());
 
       summary_rows.push_back({
+          first.suite_name,
+          first.run_name,
           first.benchmark_name,
           first.case_family,
+          first.sweep_family,
           first.case_name,
+          first.shape_a,
+          first.shape_b,
           first.shape_pair,
+          first.mesh_a,
+          first.mesh_b,
+          formatDouble(first.mesh_scale_a),
+          formatDouble(first.mesh_scale_b),
           first.sdf_backend,
           first.reference_backend,
           first.solver_backend,
           formatDouble(first.voxel_size),
           formatDouble(first.narrow_band_half_width),
+          std::to_string(first.seed),
           std::to_string(values.size()),
           std::to_string(invalid_result_count),
           std::to_string(degenerate_normal_count),
@@ -720,6 +818,10 @@ int main(int argc, char** argv) {
           {"degenerate_normal_count", degenerate_normal_count},
           {"gap_error", numericSummaryValue(gap_error)},
           {"invalid_result_count", invalid_result_count},
+          {"mesh_a", first.mesh_a},
+          {"mesh_b", first.mesh_b},
+          {"mesh_scale_a", first.mesh_scale_a},
+          {"mesh_scale_b", first.mesh_scale_b},
           {"narrow_band_edge_hit_count", narrow_band_edge_hit_count},
           {"narrow_band_half_width", first.narrow_band_half_width},
           {"normal_angle_error_deg", numericSummaryValue(normal_angle_error)},
@@ -732,16 +834,22 @@ int main(int argc, char** argv) {
           {"reference_runtime_us", numericSummaryValue(runtime_reference)},
           {"reference_signed_distance", numericSummaryValue(reference_signed_distance)},
           {"relative_gap_error", numericSummaryValue(relative_gap_error)},
+          {"run_name", first.run_name},
           {"sample_count", static_cast<int>(values.size())},
           {"sdf_backend", first.sdf_backend},
           {"sdf_gap_error_vs_analytic", numericSummaryValue(sdf_gap_error_vs_analytic)},
           {"sdf_normal_angle_error_vs_analytic_deg", numericSummaryValue(sdf_normal_angle_error_vs_analytic)},
+          {"seed", first.seed},
+          {"shape_a", first.shape_a},
+          {"shape_b", first.shape_b},
           {"shape_pair", first.shape_pair},
           {"signed_gap", numericSummaryValue(signed_gap)},
           {"solver_backend", first.solver_backend},
           {"solver_iterations", numericSummaryValue(solver_iterations)},
           {"solver_residual", numericSummaryValue(solver_residual)},
           {"solver_success_rate", solver_success_rate},
+          {"suite_name", first.suite_name},
+          {"sweep_family", first.sweep_family},
           {"symmetry_residual", numericSummaryValue(symmetry_residual)},
           {"tangent_frame_fallback_count", tangent_frame_fallback_count},
           {"tangent_orthogonality_residual", numericSummaryValue(tangent_orthogonality)},
@@ -760,11 +868,12 @@ int main(int argc, char** argv) {
 
     apps::writeCsv(
         benchmark_output_dir / "summary.csv",
-        {"benchmark_name", "case_family", "case_name", "shape_pair", "sdf_backend", "reference_backend",
-         "solver_backend", "voxel_size", "narrow_band_half_width", "sample_count", "invalid_result_count",
-         "degenerate_normal_count", "tangent_frame_fallback_count", "narrow_band_edge_hit_count",
-         "signed_gap_mean", "reference_signed_distance_mean", "gap_error_mean", "absolute_gap_error_mean",
-         "relative_gap_error_mean", "sdf_gap_error_vs_analytic_mean",
+        {"suite_name", "run_name", "benchmark_name", "case_family", "sweep_family", "case_name", "shape_a",
+         "shape_b", "shape_pair", "mesh_a", "mesh_b", "mesh_scale_a", "mesh_scale_b", "sdf_backend",
+         "reference_backend", "solver_backend", "voxel_size", "narrow_band_half_width", "seed", "sample_count",
+         "invalid_result_count", "degenerate_normal_count", "tangent_frame_fallback_count",
+         "narrow_band_edge_hit_count", "signed_gap_mean", "reference_signed_distance_mean", "gap_error_mean",
+         "absolute_gap_error_mean", "relative_gap_error_mean", "sdf_gap_error_vs_analytic_mean",
          "reference_gap_error_vs_analytic_mean", "normal_angle_error_deg_mean",
          "sdf_normal_angle_error_vs_analytic_deg_mean",
          "reference_normal_angle_error_vs_analytic_deg_mean", "symmetry_residual_mean",
@@ -799,10 +908,12 @@ int main(int argc, char** argv) {
             {"config", resolved_config_json},
             {"config_path", config_path.string()},
             {"config_summary", benchmarkConfigSummary(config)},
+            {"run_name", config.run_name},
             {"resolved_reference_backends", resolved_reference_backends},
             {"resolved_sdf_backends", resolved_sdf_backends},
             {"resolved_solver_backends", resolved_solver_backends},
             {"skipped_backends", skipped_json},
+            {"suite_name", config.suite_name},
             {"timestamp_utc", utcTimestampNow()},
         }) +
             "\n");
@@ -836,11 +947,20 @@ int main(int argc, char** argv) {
                  {"sdf", availability.force_fallback_sdf},
                  {"solver", availability.force_simple_solver},
              }},
+            {"run_name", config.run_name},
             {"platform_track", availability.platform_track},
+            {"suite_name", config.suite_name},
             {"timestamp_utc", utcTimestampNow()},
         }) +
             "\n");
 
+    report << "\n## Output Files\n\n"
+           << "- `config_resolved.json`\n"
+           << "- `environment.json`\n"
+           << "- `samples.csv`\n"
+           << "- `summary.csv`\n"
+           << "- `summary.json`\n"
+           << "- `report.md`\n";
     writeTextFile(benchmark_output_dir / "report.md", report.str());
     writeTextFile(
         benchmark_output_dir / "summary.json",
@@ -848,9 +968,12 @@ int main(int argc, char** argv) {
             {"benchmark_name", config.benchmark_name},
             {"case_family", config.case_family},
             {"config_summary", benchmarkConfigSummary(config)},
+            {"run_name", config.run_name},
             {"sample_count", static_cast<int>(records.size())},
             {"samples", sample_json_rows},
             {"skipped_backends", skipped_json},
+            {"suite_name", config.suite_name},
+            {"sweep_family", config.sweep_family},
             {"summary_rows", summary_json_rows},
             {"timestamp_utc", utcTimestampNow()},
         }) +

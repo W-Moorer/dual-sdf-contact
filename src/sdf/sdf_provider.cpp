@@ -7,16 +7,14 @@ namespace baseline {
 namespace {
 
 Aabb3 computeAnalyticWorldAabb(const ReferenceGeometry& geometry, double narrow_band_world) {
-  if (geometry.type == ShapeType::Plane) {
+  Aabb3 bounds = geometry.worldAabb();
+  if (!bounds.valid) {
     return {};
   }
-
-  Vec3 extents = geometry.half_extents;
-  if (geometry.type == ShapeType::Sphere) {
-    extents = {geometry.radius, geometry.radius, geometry.radius};
-  }
-  extents += {narrow_band_world, narrow_band_world, narrow_band_world};
-  return {geometry.center - extents, geometry.center + extents, true};
+  const Vec3 margin{narrow_band_world, narrow_band_world, narrow_band_world};
+  bounds.lower = bounds.lower - margin;
+  bounds.upper = bounds.upper + margin;
+  return bounds;
 }
 
 }  // namespace

@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <map>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -23,6 +25,157 @@ Vec3 clampVec(const Vec3& value, const Vec3& lower, const Vec3& upper) {
       clamp(value.y, lower.y, upper.y),
       clamp(value.z, lower.z, upper.z),
   };
+}
+
+struct ClosestPointResult {
+  Vec3 point{0.0, 0.0, 0.0};
+  Vec3 normal{1.0, 0.0, 0.0};
+  double distance_sq{0.0};
+};
+
+Vec3 localTriangleNormal(const Vec3& a, const Vec3& b, const Vec3& c) {
+  return normalized(cross(b - a, c - a), {1.0, 0.0, 0.0});
+}
+
+ClosestPointResult closestPointOnTriangle(const Vec3& query, const Vec3& a, const Vec3& b, const Vec3& c) {
+  const Vec3 ab = b - a;
+  const Vec3 ac = c - a;
+  const Vec3 ap = query - a;
+  const double d1 = dot(ab, ap);
+  const double d2 = dot(ac, ap);
+  if (d1 <= 0.0 && d2 <= 0.0) {
+    return {a, localTriangleNormal(a, b, c), squaredNorm(query - a)};
+  }
+
+  const Vec3 bp = query - b;
+  const double d3 = dot(ab, bp);
+  const double d4 = dot(ac, bp);
+  if (d3 >= 0.0 && d4 <= d3) {
+    return {b, localTriangleNormal(a, b, c), squaredNorm(query - b)};
+  }
+
+  const double vc = d1 * d4 - d3 * d2;
+  if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+    const double v = d1 / (d1 - d3);
+    const Vec3 point = a + ab * v;
+    return {point, localTriangleNormal(a, b, c), squaredNorm(query - point)};
+  }
+
+  const Vec3 cp = query - c;
+  const double d5 = dot(ab, cp);
+  const double d6 = dot(ac, cp);
+  if (d6 >= 0.0 && d5 <= d6) {
+    return {c, localTriangleNormal(a, b, c), squaredNorm(query - c)};
+  }
+
+  const double vb = d5 * d2 - d1 * d6;
+  if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+    const double w = d2 / (d2 - d6);
+    const Vec3 point = a + ac * w;
+    return {point, localTriangleNormal(a, b, c), squaredNorm(query - point)};
+  }
+
+  const double va = d3 * d6 - d5 * d4;
+  if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+    const Vec3 bc = c - b;
+    const double w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+    const Vec3 point = b + bc * w;
+    return {point, localTriangleNormal(a, b, c), squaredNorm(query - point)};
+  }
+
+  const double denominator = 1.0 / (va + vb + vc);
+  const double v = vb * denominator;
+  const double w = vc * denominator;
+  const Vec3 point = a + ab * v + ac * w;
+  return {point, localTriangleNormal(a, b, c), squaredNorm(query - point)};
+}
+
+bool rayIntersectsTriangle(const Vec3& origin,
+                           const Vec3& direction,
+                           const Vec3& a,
+                           const Vec3& b,
+                           const Vec3& c) {
+  const double epsilon = 1e-10;
+  const Vec3 edge1 = b - a;
+  const Vec3 edge2 = c - a;
+  const Vec3 p = cross(direction, edge2);
+  const double determinant = dot(edge1, p);
+  if (std::abs(determinant) <= epsilon) {
+    return false;
+  }
+  const double inverse_determinant = 1.0 / determinant;
+  const Vec3 t = origin - a;
+  const double u = dot(t, p) * inverse_determinant;
+  if (u < 0.0 || u > 1.0) {
+    return false;
+  }
+  const Vec3 q = cross(t, edge1);
+  const double v = dot(direction, q) * inverse_determinant;
+  if (v < 0.0 || u + v > 1.0) {
+    return false;
+  }
+  const double distance = dot(edge2, q) * inverse_determinant;
+  return distance > epsilon;
+}
+
+ClosestPointResult closestPointOnMesh(const TriangleMesh& mesh, const Vec3& local_query) {
+  ClosestPointResult best;
+  best.point = mesh.vertices.front();
+  best.distance_sq = squaredNorm(local_query - best.point);
+
+  for (const auto& triangle : mesh.triangles) {
+    const ClosestPointResult candidate = closestPointOnTriangle(
+        local_query, mesh.vertices[triangle[0]], mesh.vertices[triangle[1]], mesh.vertices[triangle[2]]);
+    if (candidate.distance_sq < best.distance_sq) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+bool pointInsideMesh(const TriangleMesh& mesh, const Vec3& local_query) {
+  const Vec3 ray_direction = normalized({1.0, 0.3125, 0.125}, {1.0, 0.0, 0.0});
+  int intersections = 0;
+  for (const auto& triangle : mesh.triangles) {
+    if (rayIntersectsTriangle(
+            local_query, ray_direction, mesh.vertices[triangle[0]], mesh.vertices[triangle[1]], mesh.vertices[triangle[2]])) {
+      ++intersections;
+    }
+  }
+  return (intersections % 2) == 1;
+}
+
+Aabb3 transformAabb(const Aabb3& local_aabb, const ReferenceGeometry& geometry) {
+  if (!local_aabb.valid) {
+    return {};
+  }
+
+  Aabb3 world;
+  for (int sx : {0, 1}) {
+    for (int sy : {0, 1}) {
+      for (int sz : {0, 1}) {
+        const Vec3 local_corner{
+            sx == 0 ? local_aabb.lower.x : local_aabb.upper.x,
+            sy == 0 ? local_aabb.lower.y : local_aabb.upper.y,
+            sz == 0 ? local_aabb.lower.z : local_aabb.upper.z,
+        };
+        const Vec3 world_corner = geometry.toWorldPoint(local_corner);
+        if (!world.valid) {
+          world.valid = true;
+          world.lower = world_corner;
+          world.upper = world_corner;
+        } else {
+          world.lower.x = std::min(world.lower.x, world_corner.x);
+          world.lower.y = std::min(world.lower.y, world_corner.y);
+          world.lower.z = std::min(world.lower.z, world_corner.z);
+          world.upper.x = std::max(world.upper.x, world_corner.x);
+          world.upper.y = std::max(world.upper.y, world_corner.y);
+          world.upper.z = std::max(world.upper.z, world_corner.z);
+        }
+      }
+    }
+  }
+  return world;
 }
 
 std::vector<Vec3> boxCorners(const ReferenceGeometry& box) {
@@ -63,7 +216,10 @@ DistanceQueryResult makeGenericResult(const ReferenceGeometry& a,
   const Vec3 point_b = b.closestPoint(a.center);
   const Vec3 direction = point_b - point_a;
   const Vec3 normal = normalized(direction, normalized(b.center - a.center, {1.0, 0.0, 0.0}));
-  const double signed_gap = dot(direction, normal);
+  double signed_gap = dot(direction, normal);
+  if (a.signedDistance(b.center) <= 0.0 || b.signedDistance(a.center) <= 0.0) {
+    signed_gap = -std::max(1e-9, std::min(std::abs(a.signedDistance(b.center)), std::abs(b.signedDistance(a.center))));
+  }
   return makeDistanceResult(signed_gap <= 0.0, signed_gap, normal, point_a, point_b, std::move(backend_name));
 }
 
@@ -222,6 +378,8 @@ struct FclShapeInstance {
 };
 
 std::optional<FclShapeInstance> makeFclShape(const ReferenceGeometry& geometry) {
+  using MeshModel = fcl::BVHModel<fcl::OBBRSSd>;
+
   FclShapeInstance shape;
   shape.transform = fcl::Transform3d::Identity();
   shape.transform.translation() = toFcl(geometry.center);
@@ -237,6 +395,35 @@ std::optional<FclShapeInstance> makeFclShape(const ReferenceGeometry& geometry) 
   if (geometry.type == ShapeType::Box) {
     shape.geometry = std::make_shared<fcl::Boxd>(
         2.0 * geometry.half_extents.x, 2.0 * geometry.half_extents.y, 2.0 * geometry.half_extents.z);
+    return shape;
+  }
+
+  if (geometry.type == ShapeType::Mesh && geometry.mesh) {
+    static std::map<const TriangleMesh*, std::weak_ptr<fcl::CollisionGeometryd>> cache;
+    const auto cached = cache.find(geometry.mesh.get());
+    if (cached != cache.end()) {
+      if (auto existing = cached->second.lock()) {
+        shape.geometry = existing;
+        return shape;
+      }
+    }
+
+    auto model = std::make_shared<MeshModel>();
+    std::vector<fcl::Vector3d> vertices;
+    vertices.reserve(geometry.mesh->vertices.size());
+    for (const Vec3& vertex : geometry.mesh->vertices) {
+      vertices.push_back(toFcl(vertex));
+    }
+    std::vector<fcl::Triangle> triangles;
+    triangles.reserve(geometry.mesh->triangles.size());
+    for (const auto& triangle : geometry.mesh->triangles) {
+      triangles.emplace_back(triangle[0], triangle[1], triangle[2]);
+    }
+    model->beginModel();
+    model->addSubModel(vertices, triangles);
+    model->endModel();
+    shape.geometry = model;
+    cache[geometry.mesh.get()] = model;
     return shape;
   }
 
@@ -282,6 +469,9 @@ DistanceQueryResult fclDistance(const ReferenceGeometry& a,
   if (collision && norm(point_b - point_a) <= 1e-10) {
     point_a = a.closestPoint(b.center);
     point_b = b.closestPoint(a.center);
+  }
+  if (dot(normal, fallback_normal) < 0.0) {
+    normal = -normal;
   }
 
   return makeDistanceResult(collision, signed_distance, normal, point_a, point_b, std::move(backend_name));
@@ -330,12 +520,43 @@ ReferenceGeometry ReferenceGeometry::makePlane(std::string name, const Vec3& poi
   return geometry;
 }
 
+ReferenceGeometry ReferenceGeometry::makeMesh(std::string name,
+                                              const Vec3& center,
+                                              std::shared_ptr<const TriangleMesh> mesh) {
+  return makeMesh(std::move(name), center, std::move(mesh), identityMat3());
+}
+
+ReferenceGeometry ReferenceGeometry::makeMesh(std::string name,
+                                              const Vec3& center,
+                                              std::shared_ptr<const TriangleMesh> mesh,
+                                              const Mat3& rotation) {
+  if (!mesh) {
+    throw std::runtime_error("ReferenceGeometry::makeMesh requires a non-null TriangleMesh.");
+  }
+
+  ReferenceGeometry geometry;
+  geometry.name = std::move(name);
+  geometry.type = ShapeType::Mesh;
+  geometry.center = center;
+  geometry.rotation = rotation;
+  geometry.mesh = std::move(mesh);
+  geometry.radius = geometry.mesh->bounding_radius;
+  geometry.half_extents = geometry.mesh->local_aabb.extent() * 0.5;
+  return geometry;
+}
+
 double ReferenceGeometry::signedDistance(const Vec3& query) const {
   if (type == ShapeType::Sphere) {
     return norm(query - center) - radius;
   }
   if (type == ShapeType::Plane) {
     return dot(query - center, plane_normal);
+  }
+  if (type == ShapeType::Mesh) {
+    const Vec3 local_query = toLocalPoint(query);
+    const ClosestPointResult closest = closestPointOnMesh(*mesh, local_query);
+    const double distance = std::sqrt(std::max(0.0, closest.distance_sq));
+    return pointInsideMesh(*mesh, local_query) ? -distance : distance;
   }
 
   const Vec3 local = toLocalPoint(query);
@@ -352,6 +573,10 @@ Vec3 ReferenceGeometry::closestPoint(const Vec3& query) const {
   }
   if (type == ShapeType::Plane) {
     return query - plane_normal * signedDistance(query);
+  }
+  if (type == ShapeType::Mesh) {
+    const Vec3 local_query = toLocalPoint(query);
+    return toWorldPoint(closestPointOnMesh(*mesh, local_query).point);
   }
 
   const Vec3 local_query = toLocalPoint(query);
@@ -399,6 +624,14 @@ Vec3 ReferenceGeometry::normalAt(const Vec3& query) const {
   if (type == ShapeType::Plane) {
     return plane_normal;
   }
+  if (type == ShapeType::Mesh) {
+    const Vec3 point = closestPoint(query);
+    const double phi = signedDistance(query);
+    if (phi < 0.0) {
+      return normalized(point - query, {1.0, 0.0, 0.0});
+    }
+    return normalized(query - point, {1.0, 0.0, 0.0});
+  }
 
   if (signedDistance(query) >= 0.0) {
     return normalized(query - closestPoint(query), {1.0, 0.0, 0.0});
@@ -436,7 +669,34 @@ double ReferenceGeometry::boundingRadius() const {
   if (type == ShapeType::Plane) {
     return 1.0e9;
   }
+  if (type == ShapeType::Mesh && mesh) {
+    return mesh->bounding_radius;
+  }
   return norm(half_extents);
+}
+
+Aabb3 ReferenceGeometry::localAabb() const {
+  if (type == ShapeType::Plane) {
+    return {};
+  }
+  if (type == ShapeType::Sphere) {
+    return {{-radius, -radius, -radius}, {radius, radius, radius}, true};
+  }
+  if (type == ShapeType::Mesh && mesh) {
+    return mesh->local_aabb;
+  }
+  return {-half_extents, half_extents, true};
+}
+
+Aabb3 ReferenceGeometry::worldAabb() const {
+  if (type == ShapeType::Plane) {
+    return {};
+  }
+  if (type == ShapeType::Sphere) {
+    const Vec3 extents{radius, radius, radius};
+    return {center - extents, center + extents, true};
+  }
+  return transformAabb(localAabb(), *this);
 }
 
 Vec3 ReferenceGeometry::toLocalPoint(const Vec3& world_point) const {
@@ -488,7 +748,7 @@ bool FclReferenceBackend::realBackendAvailable() { return BASELINE_REAL_FCL_AVAI
 
 std::string FclReferenceBackend::availabilitySummary() {
   if (realBackendAvailable()) {
-    return "FCL detected and wired through fcl::distance / fcl::collide for sphere/box primitives.";
+    return "FCL detected and wired through fcl::distance / fcl::collide for sphere/box primitives and mesh-backed benchmark geometries.";
   }
   return "FCL not detected; backend falls back to analytic queries.";
 }

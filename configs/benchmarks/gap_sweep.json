@@ -1,6 +1,7 @@
 {
   "benchmark_name": "gap_sweep",
-  "case_family": "gap_sweep",
+  "case_family": "primitive",
+  "sweep_family": "gap_sweep",
   "description": "Gap sweep centered around separation, near-contact, and mild penetration.",
   "sdf_backends": ["analytic", "openvdb"],
   "reference_backends": ["analytic", "fcl"],

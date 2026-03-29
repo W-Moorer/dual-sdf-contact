@@ -1,6 +1,7 @@
 {
   "benchmark_name": "resolution_sweep",
-  "case_family": "resolution_sweep",
+  "case_family": "primitive",
+  "sweep_family": "resolution_sweep",
   "description": "OpenVDB resolution and narrow-band ablation around a fixed primitive contact case.",
   "sdf_backends": ["analytic", "openvdb"],
   "reference_backends": ["analytic", "fcl"],

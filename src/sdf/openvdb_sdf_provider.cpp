@@ -71,6 +71,33 @@ std::vector<openvdb::Vec3I> boxMeshTriangles() {
   };
 }
 
+std::vector<openvdb::Vec3s> meshPoints(const ReferenceGeometry& geometry) {
+  std::vector<openvdb::Vec3s> points;
+  if (!geometry.mesh) {
+    return points;
+  }
+  points.reserve(geometry.mesh->vertices.size());
+  for (const Vec3& vertex : geometry.mesh->vertices) {
+    const Vec3 world_point = geometry.toWorldPoint(vertex);
+    points.emplace_back(static_cast<float>(world_point.x),
+                        static_cast<float>(world_point.y),
+                        static_cast<float>(world_point.z));
+  }
+  return points;
+}
+
+std::vector<openvdb::Vec3I> meshTriangles(const ReferenceGeometry& geometry) {
+  std::vector<openvdb::Vec3I> triangles;
+  if (!geometry.mesh) {
+    return triangles;
+  }
+  triangles.reserve(geometry.mesh->triangles.size());
+  for (const auto& triangle : geometry.mesh->triangles) {
+    triangles.emplace_back(triangle[0], triangle[1], triangle[2]);
+  }
+  return triangles;
+}
+
 void ensureOpenVdbInitialized() {
   static const bool initialized = []() {
     openvdb::initialize();
@@ -121,6 +148,14 @@ openvdb::FloatGrid::Ptr buildOpenVdbGrid(const ReferenceGeometry& geometry,
         bbox, *transform, static_cast<float>(narrow_band));
   }
 
+  if (geometry.type == ShapeType::Mesh && geometry.mesh) {
+    auto transform = openvdb::math::Transform::createLinearTransform(voxel_size);
+    const auto points = meshPoints(geometry);
+    const auto triangles = meshTriangles(geometry);
+    return openvdb::tools::meshToLevelSet<openvdb::FloatGrid>(
+        *transform, points, triangles, static_cast<float>(narrow_band));
+  }
+
   return nullptr;
 }
 
@@ -154,7 +189,7 @@ bool OpenVdbSdfProvider::realBackendAvailable() { return BASELINE_REAL_OPENVDB_A
 
 std::string OpenVdbSdfProvider::availabilitySummary() {
   if (realBackendAvailable()) {
-    return "OpenVDB detected and compiled in. Sphere/box level sets use real grid generation and world-space sampling inside the trusted narrow band, with analytic extension outside that band for current primitive-backed examples.";
+    return "OpenVDB detected and compiled in. Sphere/box/mesh level sets use real grid generation and world-space sampling inside the trusted narrow band, with analytic extension outside that band for the current benchmark path.";
   }
   return "OpenVDB not detected; provider falls back to the analytic narrow-band implementation.";
 }

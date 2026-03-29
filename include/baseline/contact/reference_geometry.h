@@ -6,10 +6,11 @@
 
 #include "baseline/core/math.h"
 #include "baseline/core/build_config.h"
+#include "baseline/mesh/triangle_mesh.h"
 
 namespace baseline {
 
-enum class ShapeType { Sphere, Box, Plane };
+enum class ShapeType { Sphere, Box, Plane, Mesh };
 
 struct ReferenceGeometry {
   std::string name;
@@ -19,6 +20,7 @@ struct ReferenceGeometry {
   double radius{0.5};
   Vec3 plane_normal{0.0, 1.0, 0.0};
   Mat3 rotation{identityMat3()};
+  std::shared_ptr<const TriangleMesh> mesh;
 
   static ReferenceGeometry makeSphere(std::string name, const Vec3& center, double radius);
   static ReferenceGeometry makeBox(std::string name, const Vec3& center, const Vec3& half_extents);
@@ -27,11 +29,20 @@ struct ReferenceGeometry {
                                    const Vec3& half_extents,
                                    const Mat3& rotation);
   static ReferenceGeometry makePlane(std::string name, const Vec3& point, const Vec3& normal);
+  static ReferenceGeometry makeMesh(std::string name,
+                                    const Vec3& center,
+                                    std::shared_ptr<const TriangleMesh> mesh);
+  static ReferenceGeometry makeMesh(std::string name,
+                                    const Vec3& center,
+                                    std::shared_ptr<const TriangleMesh> mesh,
+                                    const Mat3& rotation);
 
   double signedDistance(const Vec3& query) const;
   Vec3 closestPoint(const Vec3& query) const;
   Vec3 normalAt(const Vec3& query) const;
   double boundingRadius() const;
+  Aabb3 localAabb() const;
+  Aabb3 worldAabb() const;
   Vec3 toLocalPoint(const Vec3& world_point) const;
   Vec3 toWorldPoint(const Vec3& local_point) const;
   Vec3 toLocalDirection(const Vec3& world_direction) const;
