@@ -1,5 +1,7 @@
 set(BASELINE_LIBRARY_SOURCES
   core/io_utils.cpp
+  core/simple_json.cpp
+  benchmark/benchmark_config.cpp
   runtime/backend_factory.cpp
   sdf/sdf_provider.cpp
   sdf/openvdb_sdf_provider.cpp

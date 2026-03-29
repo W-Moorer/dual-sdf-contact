@@ -4,6 +4,7 @@
 #include <cmath>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "baseline/core/build_config.h"
 
@@ -42,6 +43,34 @@ openvdb::Vec3d toOpenVdb(const Vec3& value) { return {value.x, value.y, value.z}
 
 Vec3 fromOpenVdb(const openvdb::Vec3d& value) { return {value.x(), value.y(), value.z()}; }
 
+std::vector<openvdb::Vec3s> boxMeshPoints(const ReferenceGeometry& geometry) {
+  std::vector<openvdb::Vec3s> points;
+  points.reserve(8);
+  for (int sx : {-1, 1}) {
+    for (int sy : {-1, 1}) {
+      for (int sz : {-1, 1}) {
+        const Vec3 world_point = geometry.toWorldPoint(
+            {sx * geometry.half_extents.x, sy * geometry.half_extents.y, sz * geometry.half_extents.z});
+        points.emplace_back(static_cast<float>(world_point.x),
+                            static_cast<float>(world_point.y),
+                            static_cast<float>(world_point.z));
+      }
+    }
+  }
+  return points;
+}
+
+std::vector<openvdb::Vec3I> boxMeshTriangles() {
+  return {
+      {0, 4, 6}, {0, 6, 2},
+      {1, 3, 7}, {1, 7, 5},
+      {0, 1, 5}, {0, 5, 4},
+      {2, 6, 7}, {2, 7, 3},
+      {0, 2, 3}, {0, 3, 1},
+      {4, 5, 7}, {4, 7, 6},
+  };
+}
+
 void ensureOpenVdbInitialized() {
   static const bool initialized = []() {
     openvdb::initialize();
@@ -79,6 +108,12 @@ openvdb::FloatGrid::Ptr buildOpenVdbGrid(const ReferenceGeometry& geometry,
 
   if (geometry.type == ShapeType::Box) {
     auto transform = openvdb::math::Transform::createLinearTransform(voxel_size);
+    if (!geometry.hasIdentityRotation()) {
+      const auto points = boxMeshPoints(geometry);
+      const auto triangles = boxMeshTriangles();
+      return openvdb::tools::meshToLevelSet<openvdb::FloatGrid>(
+          *transform, points, triangles, static_cast<float>(narrow_band));
+    }
     const openvdb::math::BBox<openvdb::Vec3d> bbox(
         toOpenVdb(geometry.center - geometry.half_extents),
         toOpenVdb(geometry.center + geometry.half_extents));

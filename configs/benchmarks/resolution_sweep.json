@@ -1,0 +1,30 @@
+{
+  "benchmark_name": "resolution_sweep",
+  "case_family": "resolution_sweep",
+  "description": "OpenVDB resolution and narrow-band ablation around a fixed primitive contact case.",
+  "sdf_backends": ["analytic", "openvdb"],
+  "reference_backends": ["analytic", "fcl"],
+  "solver_backends": ["simple"],
+  "voxel_sizes": [0.16, 0.08, 0.04],
+  "narrow_band_half_widths": [2.0, 4.0, 8.0],
+  "runtime_iterations": 16,
+  "enable_solver_probe": true,
+  "seed": 17,
+  "base_case": {
+    "name": "sphere_box_resolution_base",
+    "gap_axis": [1.0, 0.0, 0.0],
+    "a": {
+      "name": "sphere_a",
+      "type": "sphere",
+      "center": [0.0, 0.0, 0.0],
+      "radius": 0.8
+    },
+    "b": {
+      "name": "box_b",
+      "type": "box",
+      "center": [1.08, 0.08, 0.0],
+      "half_extents": [0.42, 0.38, 0.32],
+      "rotation_rpy_deg": [0.0, 0.0, 25.0]
+    }
+  }
+}

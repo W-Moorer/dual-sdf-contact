@@ -1,28 +1,112 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <iostream>
+#include <map>
+#include <numeric>
+#include <optional>
 #include <sstream>
+#include <string>
+#include <tuple>
 #include <vector>
 
+#include "baseline/benchmark/benchmark_config.h"
 #include "baseline/contact/contact_problem_builder.h"
 #include "baseline/contact/dual_sdf_contact_calculator.h"
+#include "baseline/core/build_config.h"
+#include "baseline/core/io_utils.h"
+#include "baseline/core/simple_json.h"
 #include "baseline/runtime/backend_factory.h"
-#include "baseline/solver/simple_ccp_solver.h"
 #include "example_utils.h"
 
 namespace {
 
+using baseline::BenchmarkConfig;
+using baseline::BenchmarkSampleSpec;
 using baseline::ContactKinematicsResult;
+using baseline::ContactProblem;
+using baseline::ContactProblemBuilder;
 using baseline::DistanceQueryResult;
-using baseline::ReferenceGeometry;
+using baseline::DualSdfContactCalculator;
 using baseline::ResolvedReferenceBackend;
 using baseline::ResolvedSdfBackend;
 using baseline::ResolvedSolverBackend;
+using baseline::SolverResult;
+using JsonValue = baseline::json::Value;
 
-struct BenchmarkCase {
-  std::string name;
-  ReferenceGeometry a;
-  ReferenceGeometry b;
+struct BenchmarkOptions {
+  std::string config_path;
+  std::string case_family_override;
+  std::string sdf_backend;
+  std::string reference_backend;
+  std::string solver_backend;
+  std::filesystem::path output_dir;
+  std::optional<int> seed_override;
+  bool help_requested{false};
+};
+
+struct SampleRecord {
+  std::string timestamp_utc;
+  std::string benchmark_name;
+  std::string config_summary;
+  std::string case_family;
+  std::string case_name;
+  std::string sample_name;
+  std::string shape_pair;
+  std::string sdf_backend;
+  std::string sdf_provider_backend;
+  std::string reference_backend;
+  std::string reference_engine_name;
+  std::string solver_backend;
+  std::string solver_name;
+  double voxel_size{0.0};
+  double narrow_band_half_width{0.0};
+  int seed{0};
+  double requested_gap{0.0};
+  double orientation_angle_deg{0.0};
+  double analytic_reference_distance{0.0};
+  double analytic_reference_signed_distance{0.0};
+  double reference_distance{0.0};
+  double reference_signed_distance{0.0};
+  double analytic_signed_gap{0.0};
+  double signed_gap{0.0};
+  double gap_error{0.0};
+  double absolute_gap_error{0.0};
+  double relative_gap_error{0.0};
+  double sdf_gap_error_vs_analytic{0.0};
+  double reference_gap_error_vs_analytic{0.0};
+  double normal_angle_error_deg{0.0};
+  double sdf_normal_angle_error_vs_analytic_deg{0.0};
+  double reference_normal_angle_error_vs_analytic_deg{0.0};
+  double symmetry_residual{0.0};
+  double tangent_orthogonality_residual{0.0};
+  double point_distance_consistency{0.0};
+  int invalid_result_count{0};
+  int degenerate_normal_count{0};
+  int tangent_frame_fallback_count{0};
+  int narrow_band_edge_hit_count{0};
+  int gradient_consistent_flag{0};
+  double analytic_reference_runtime_us{0.0};
+  double reference_runtime_us{0.0};
+  double analytic_sdf_runtime_us{0.0};
+  double dual_sdf_runtime_us{0.0};
+  double solver_runtime_us{0.0};
+  double runtime_total_us{0.0};
+  double normal_impulse{0.0};
+  double tangential_impulse_magnitude{0.0};
+  double solver_residual{0.0};
+  double solver_iterations{0.0};
+  int solver_success_flag{0};
+};
+
+struct NumericSummary {
+  double mean{0.0};
+  double stddev{0.0};
+  double min{0.0};
+  double max{0.0};
+  double median{0.0};
+  double p95{0.0};
 };
 
 template <typename Fn>
@@ -34,26 +118,213 @@ double averageRuntimeMicros(int iterations, Fn&& fn) {
   }
   const auto stop = std::chrono::steady_clock::now();
   (void)sink;
-  return std::chrono::duration<double, std::micro>(stop - start).count() / static_cast<double>(iterations);
+  return std::chrono::duration<double, std::micro>(stop - start).count() /
+         static_cast<double>(std::max(iterations, 1));
 }
 
-std::vector<BenchmarkCase> makeBenchmarkCases() {
-  return {
-      {"sphere_sphere_sep",
-       ReferenceGeometry::makeSphere("sphere_a", {0.0, 0.0, 0.0}, 0.8),
-       ReferenceGeometry::makeSphere("sphere_b", {1.95, 0.0, 0.0}, 0.65)},
-      {"sphere_box_sep",
-       ReferenceGeometry::makeSphere("sphere_a", {0.0, 0.0, 0.0}, 0.8),
-       ReferenceGeometry::makeBox("box_b", {1.25, 0.15, 0.0}, {0.35, 0.45, 0.40})},
-      {"sphere_box_pen",
-       ReferenceGeometry::makeSphere("sphere_a", {0.0, 0.0, 0.0}, 0.8),
-       ReferenceGeometry::makeBox("box_b", {0.95, 0.05, 0.0}, {0.45, 0.50, 0.35})},
-      {"box_box_sep",
-       ReferenceGeometry::makeBox("box_a", {0.0, 0.0, 0.0}, {0.45, 0.30, 0.25}),
-       ReferenceGeometry::makeBox("box_b", {1.25, 0.10, 0.0}, {0.40, 0.35, 0.30})},
-      {"box_box_pen",
-       ReferenceGeometry::makeBox("box_a", {0.0, 0.0, 0.0}, {0.45, 0.30, 0.25}),
-       ReferenceGeometry::makeBox("box_b", {0.70, 0.05, 0.0}, {0.40, 0.35, 0.30})},
+BenchmarkOptions parseOptions(int argc, char** argv) {
+  BenchmarkOptions options;
+  options.sdf_backend = baseline::apps::envOrEmpty("BASELINE_SDF_BACKEND");
+  options.reference_backend = baseline::apps::envOrEmpty("BASELINE_REFERENCE_BACKEND");
+  options.solver_backend = baseline::apps::envOrEmpty("BASELINE_SOLVER_BACKEND");
+
+  for (int index = 1; index < argc; ++index) {
+    const std::string argument = argv[index];
+    if (argument == "--help" || argument == "-h") {
+      options.help_requested = true;
+      continue;
+    }
+    auto require_value = [&](const std::string& name) -> std::string {
+      if (index + 1 >= argc) {
+        throw std::runtime_error("Missing value after " + name);
+      }
+      return argv[++index];
+    };
+    if (argument == "--config") {
+      options.config_path = require_value(argument);
+    } else if (argument == "--case-family") {
+      options.case_family_override = require_value(argument);
+    } else if (argument == "--output-dir") {
+      options.output_dir = require_value(argument);
+    } else if (argument == "--seed") {
+      options.seed_override = std::stoi(require_value(argument));
+    } else if (argument == "--sdf-backend") {
+      options.sdf_backend = require_value(argument);
+    } else if (argument == "--reference-backend") {
+      options.reference_backend = require_value(argument);
+    } else if (argument == "--solver-backend") {
+      options.solver_backend = require_value(argument);
+    } else {
+      throw std::runtime_error("Unknown argument: " + argument);
+    }
+  }
+  return options;
+}
+
+void printUsage() {
+  std::cout << "ex05_compare_backends"
+               " [--config path]"
+               " [--case-family primitive|gap_sweep|orientation_sweep|resolution_sweep|mesh]"
+               " [--output-dir path]"
+               " [--seed N]"
+               " [--sdf-backend analytic|openvdb|nanovdb]"
+               " [--reference-backend analytic|hppfcl|fcl]"
+               " [--solver-backend simple|siconos]\n";
+}
+
+std::vector<std::string> singleOrOriginal(const std::vector<std::string>& values, const std::string& override_value) {
+  if (!override_value.empty()) {
+    return {override_value};
+  }
+  return values;
+}
+
+std::vector<ResolvedSdfBackend> resolveSdfBackends(const std::vector<std::string>& requested,
+                                                   std::vector<std::string>* skipped_notes) {
+  std::vector<ResolvedSdfBackend> resolved;
+  for (const std::string& name : requested) {
+    try {
+      resolved.push_back(baseline::resolveSdfBackend(name));
+    } catch (const std::exception& error) {
+      skipped_notes->push_back("sdf:" + name + ": " + error.what());
+    }
+  }
+  return resolved;
+}
+
+std::vector<ResolvedReferenceBackend> resolveReferenceBackends(const std::vector<std::string>& requested,
+                                                               std::vector<std::string>* skipped_notes) {
+  std::vector<ResolvedReferenceBackend> resolved;
+  for (const std::string& name : requested) {
+    try {
+      resolved.push_back(baseline::resolveReferenceBackend(name));
+    } catch (const std::exception& error) {
+      skipped_notes->push_back("reference:" + name + ": " + error.what());
+    }
+  }
+  return resolved;
+}
+
+std::vector<ResolvedSolverBackend> resolveSolverBackends(const std::vector<std::string>& requested,
+                                                         std::vector<std::string>* skipped_notes) {
+  std::vector<ResolvedSolverBackend> resolved;
+  for (const std::string& name : requested) {
+    try {
+      resolved.push_back(baseline::resolveSolverBackend(name));
+    } catch (const std::exception& error) {
+      skipped_notes->push_back("solver:" + name + ": " + error.what());
+    }
+  }
+  return resolved;
+}
+
+NumericSummary summarize(const std::vector<double>& values) {
+  NumericSummary summary;
+  if (values.empty()) {
+    return summary;
+  }
+  const double count = static_cast<double>(values.size());
+  summary.mean = std::accumulate(values.begin(), values.end(), 0.0) / count;
+  double variance = 0.0;
+  for (double value : values) {
+    const double delta = value - summary.mean;
+    variance += delta * delta;
+  }
+  summary.stddev = std::sqrt(variance / count);
+  auto sorted = values;
+  std::sort(sorted.begin(), sorted.end());
+  summary.min = sorted.front();
+  summary.max = sorted.back();
+  summary.median = sorted[sorted.size() / 2];
+  const std::size_t p95_index = static_cast<std::size_t>(0.95 * static_cast<double>(sorted.size() - 1));
+  summary.p95 = sorted[p95_index];
+  return summary;
+}
+
+JsonValue numericSummaryValue(const NumericSummary& summary) {
+  return JsonValue::Object{
+      {"max", summary.max},
+      {"mean", summary.mean},
+      {"median", summary.median},
+      {"min", summary.min},
+      {"p95", summary.p95},
+      {"std", summary.stddev},
+  };
+}
+
+double pointDistanceConsistency(const ContactKinematicsResult& contact) {
+  return std::abs(baseline::norm(contact.point_on_b - contact.point_on_a) - std::abs(contact.signed_gap));
+}
+
+bool invalidContact(const ContactKinematicsResult& contact) {
+  return !std::isfinite(contact.signed_gap) || !contact.hasFlag(baseline::ContactSupportPointsValid);
+}
+
+baseline::SingleStepContactParams makeSolverParams(const ContactKinematicsResult& contact) {
+  baseline::SingleStepContactParams params;
+  params.inverse_mass_a = 1.0;
+  params.inverse_mass_b = 0.0;
+  params.relative_velocity_world = baseline::fromLocal(contact.frame(), {-0.8, 0.05, 0.0});
+  params.friction_coefficient = 0.4;
+  params.restitution = 0.0;
+  params.tangential_regularization = 1e-4;
+  params.label = "benchmark-contact";
+  return params;
+}
+
+JsonValue sampleRecordValue(const SampleRecord& record) {
+  return JsonValue::Object{
+      {"absolute_gap_error", record.absolute_gap_error},
+      {"analytic_reference_distance", record.analytic_reference_distance},
+      {"analytic_reference_runtime_us", record.analytic_reference_runtime_us},
+      {"analytic_reference_signed_distance", record.analytic_reference_signed_distance},
+      {"analytic_signed_gap", record.analytic_signed_gap},
+      {"analytic_sdf_runtime_us", record.analytic_sdf_runtime_us},
+      {"benchmark_name", record.benchmark_name},
+      {"case_family", record.case_family},
+      {"case_name", record.case_name},
+      {"config_summary", record.config_summary},
+      {"degenerate_normal_count", record.degenerate_normal_count},
+      {"dual_sdf_runtime_us", record.dual_sdf_runtime_us},
+      {"gap_error", record.gap_error},
+      {"gradient_consistent_flag", record.gradient_consistent_flag},
+      {"invalid_result_count", record.invalid_result_count},
+      {"narrow_band_edge_hit_count", record.narrow_band_edge_hit_count},
+      {"narrow_band_half_width", record.narrow_band_half_width},
+      {"normal_angle_error_deg", record.normal_angle_error_deg},
+      {"normal_impulse", record.normal_impulse},
+      {"orientation_angle_deg", record.orientation_angle_deg},
+      {"point_distance_consistency", record.point_distance_consistency},
+      {"reference_backend", record.reference_backend},
+      {"reference_distance", record.reference_distance},
+      {"reference_engine_name", record.reference_engine_name},
+      {"reference_gap_error_vs_analytic", record.reference_gap_error_vs_analytic},
+      {"reference_normal_angle_error_vs_analytic_deg", record.reference_normal_angle_error_vs_analytic_deg},
+      {"reference_runtime_us", record.reference_runtime_us},
+      {"reference_signed_distance", record.reference_signed_distance},
+      {"relative_gap_error", record.relative_gap_error},
+      {"requested_gap", record.requested_gap},
+      {"runtime_total_us", record.runtime_total_us},
+      {"sample_name", record.sample_name},
+      {"sdf_backend", record.sdf_backend},
+      {"sdf_gap_error_vs_analytic", record.sdf_gap_error_vs_analytic},
+      {"sdf_normal_angle_error_vs_analytic_deg", record.sdf_normal_angle_error_vs_analytic_deg},
+      {"sdf_provider_backend", record.sdf_provider_backend},
+      {"seed", record.seed},
+      {"shape_pair", record.shape_pair},
+      {"signed_gap", record.signed_gap},
+      {"solver_backend", record.solver_backend},
+      {"solver_iterations", record.solver_iterations},
+      {"solver_name", record.solver_name},
+      {"solver_residual", record.solver_residual},
+      {"solver_runtime_us", record.solver_runtime_us},
+      {"solver_success_flag", record.solver_success_flag},
+      {"symmetry_residual", record.symmetry_residual},
+      {"tangent_frame_fallback_count", record.tangent_frame_fallback_count},
+      {"tangent_orthogonality_residual", record.tangent_orthogonality_residual},
+      {"tangential_impulse_magnitude", record.tangential_impulse_magnitude},
+      {"timestamp_utc", record.timestamp_utc},
+      {"voxel_size", record.voxel_size},
   };
 }
 
@@ -64,182 +335,529 @@ int main(int argc, char** argv) {
 
   try {
     const std::string example_name = "ex05_compare_backends";
-    const auto options = apps::parseBackendOptions(argc, argv);
+    const BenchmarkOptions options = parseOptions(argc, argv);
     if (options.help_requested) {
-      apps::printUsage(example_name);
+      printUsage();
       return 0;
     }
 
-    const auto availability = queryBackendAvailability();
-    const ResolvedSdfBackend analytic_sdf_backend = resolveSdfBackend("analytic");
-    const auto selected_sdf_backend = resolveSdfBackend(options.sdf_backend);
-    const ResolvedReferenceBackend analytic_reference_backend = resolveReferenceBackend("analytic");
-    const auto selected_reference_backend = resolveReferenceBackend(options.reference_backend);
-    const auto solver_backend = resolveSolverBackend(options.solver_backend);
-    const auto output_dir = apps::outputDir(example_name);
+    const std::filesystem::path config_path =
+        options.config_path.empty() ? sourceDir() / "configs" / "benchmarks" / "primitive_smoke.json"
+                                    : std::filesystem::path(options.config_path);
 
-    const auto analytic_reference_engine = makeReferenceBackend(analytic_reference_backend);
-    const auto selected_reference_engine = makeReferenceBackend(selected_reference_backend);
-    auto selected_solver = makeSolverBackend(solver_backend);
+    BenchmarkConfig config = loadBenchmarkConfig(config_path);
+    if (!options.case_family_override.empty()) {
+      config.case_family = options.case_family_override;
+    }
+    if (options.seed_override.has_value()) {
+      config.seed = *options.seed_override;
+    }
+    config.sdf_backends = singleOrOriginal(config.sdf_backends, options.sdf_backend);
+    config.reference_backends = singleOrOriginal(config.reference_backends, options.reference_backend);
+    config.solver_backends = singleOrOriginal(config.solver_backends, options.solver_backend);
+
+    std::vector<std::string> skipped_backend_notes;
+    const std::vector<ResolvedSdfBackend> sdf_backends = resolveSdfBackends(config.sdf_backends, &skipped_backend_notes);
+    const std::vector<ResolvedReferenceBackend> reference_backends =
+        resolveReferenceBackends(config.reference_backends, &skipped_backend_notes);
+    const std::vector<ResolvedSolverBackend> solver_backends =
+        resolveSolverBackends(config.solver_backends, &skipped_backend_notes);
+    if (sdf_backends.empty() || reference_backends.empty() || solver_backends.empty()) {
+      throw std::runtime_error("No executable backend combination remains after availability filtering.");
+    }
+
+    const std::vector<BenchmarkSampleSpec> samples = expandBenchmarkSamples(config);
+    if (samples.empty()) {
+      throw std::runtime_error("Benchmark config produced zero samples.");
+    }
+
+    const std::filesystem::path output_root =
+        options.output_dir.empty() ? apps::outputDir(example_name) : options.output_dir;
+    const std::filesystem::path benchmark_output_dir = output_root / config.benchmark_name;
+    std::filesystem::create_directories(benchmark_output_dir);
+
+    const BackendAvailabilitySummary availability = queryBackendAvailability();
+    const ResolvedSdfBackend analytic_sdf_backend = resolveSdfBackend("analytic");
+    const ResolvedReferenceBackend analytic_reference_backend = resolveReferenceBackend("analytic");
+    auto analytic_reference_engine = makeReferenceBackend(analytic_reference_backend);
 
     const DualSdfContactCalculator calculator;
     const ContactProblemBuilder builder;
-    const SimpleCcpSolver simple_solver;
 
-    std::vector<std::vector<std::string>> csv_rows;
-    std::ostringstream json_rows;
-    std::ostringstream report;
-    report << "# ex05_compare_backends\n\n"
-           << "- Platform track: `" << availability.platform_track << "`\n"
-           << "- Selected SDF backend: `" << selected_sdf_backend.selected_name << "` (`"
-           << selected_sdf_backend.note << "`)\n"
-           << "- Selected reference backend: `" << selected_reference_backend.selected_name << "` (`"
-           << selected_reference_backend.note << "`)\n"
-           << "- Selected solver backend: `" << solver_backend.selected_name << "` (`" << solver_backend.note
-           << "`)\n\n"
-           << "## Case Summary\n\n";
+    std::vector<SampleRecord> records;
+    records.reserve(samples.size() * sdf_backends.size() * reference_backends.size() * solver_backends.size());
 
-    json_rows << "  \"cases\": [\n";
-    bool first_case = true;
-
-    ContactKinematicsResult last_selected_contact;
-    ContactProblem last_problem;
-    SolverResult last_simple_result;
-    SolverResult last_selected_solver_result;
-
-    for (const auto& benchmark_case : makeBenchmarkCases()) {
+    for (const BenchmarkSampleSpec& sample : samples) {
       const DistanceQueryResult analytic_reference_result =
-          analytic_reference_engine->distance(benchmark_case.a, benchmark_case.b);
-      const DistanceQueryResult selected_reference_result =
-          selected_reference_engine->distance(benchmark_case.a, benchmark_case.b);
-
-      auto analytic_sdf_a = makeSdfProvider(analytic_sdf_backend, {"analytic_a", benchmark_case.a, 0.05, 3.0});
-      auto analytic_sdf_b = makeSdfProvider(analytic_sdf_backend, {"analytic_b", benchmark_case.b, 0.05, 3.0});
-      auto selected_sdf_a = makeSdfProvider(selected_sdf_backend, {"selected_a", benchmark_case.a, 0.05, 3.0});
-      auto selected_sdf_b = makeSdfProvider(selected_sdf_backend, {"selected_b", benchmark_case.b, 0.05, 3.0});
-
+          analytic_reference_engine->distance(sample.a, sample.b);
+      auto analytic_sdf_a = makeSdfProvider(
+          analytic_sdf_backend, {"analytic_a", sample.a, sample.voxel_size, sample.narrow_band_half_width});
+      auto analytic_sdf_b = makeSdfProvider(
+          analytic_sdf_backend, {"analytic_b", sample.b, sample.voxel_size, sample.narrow_band_half_width});
       const ContactKinematicsResult analytic_sdf_result = calculator.compute(*analytic_sdf_a, *analytic_sdf_b);
-      const ContactKinematicsResult selected_sdf_result = calculator.compute(*selected_sdf_a, *selected_sdf_b);
 
-      const double analytic_reference_runtime =
-          averageRuntimeMicros(200, [&]() { return analytic_reference_engine->distance(benchmark_case.a, benchmark_case.b).signed_distance; });
-      const double selected_reference_runtime =
-          averageRuntimeMicros(200, [&]() { return selected_reference_engine->distance(benchmark_case.a, benchmark_case.b).signed_distance; });
-      const double analytic_sdf_runtime =
-          averageRuntimeMicros(200, [&]() { return calculator.compute(*analytic_sdf_a, *analytic_sdf_b).signed_gap; });
-      const double selected_sdf_runtime =
-          averageRuntimeMicros(200, [&]() { return calculator.compute(*selected_sdf_a, *selected_sdf_b).signed_gap; });
-
-      const double reference_gap_error =
-          std::abs(selected_reference_result.signed_distance - analytic_reference_result.signed_distance);
-      const double sdf_gap_error = std::abs(selected_sdf_result.signed_gap - analytic_sdf_result.signed_gap);
-      const double reference_normal_angle_error =
-          apps::normalAngleDegrees(analytic_reference_result.normal, selected_reference_result.normal);
-      const double sdf_normal_angle_error =
-          apps::normalAngleDegrees(analytic_sdf_result.normal, selected_sdf_result.normal);
-
-      csv_rows.push_back({
-          benchmark_case.name,
-          formatDouble(analytic_reference_result.distance),
-          formatDouble(selected_reference_result.distance),
-          formatDouble(analytic_reference_result.signed_distance),
-          formatDouble(selected_reference_result.signed_distance),
-          formatDouble(analytic_sdf_result.signed_gap),
-          formatDouble(selected_sdf_result.signed_gap),
-          formatDouble(reference_gap_error),
-          formatDouble(sdf_gap_error),
-          formatDouble(reference_normal_angle_error),
-          formatDouble(sdf_normal_angle_error),
-          formatDouble(analytic_reference_runtime),
-          formatDouble(selected_reference_runtime),
-          formatDouble(analytic_sdf_runtime),
-          formatDouble(selected_sdf_runtime),
+      const double analytic_reference_runtime_us = averageRuntimeMicros(config.runtime_iterations, [&]() {
+        return analytic_reference_engine->distance(sample.a, sample.b).signed_distance;
+      });
+      const double analytic_sdf_runtime_us = averageRuntimeMicros(config.runtime_iterations, [&]() {
+        return calculator.compute(*analytic_sdf_a, *analytic_sdf_b).signed_gap;
       });
 
-      if (!first_case) {
-        json_rows << ",\n";
-      }
-      first_case = false;
-      json_rows << "    {\n"
-                << "      \"case\": " << quoteJson(benchmark_case.name) << ",\n"
-                << "      \"analytic_reference_distance\": " << formatDouble(analytic_reference_result.distance) << ",\n"
-                << "      \"selected_reference_distance\": " << formatDouble(selected_reference_result.distance) << ",\n"
-                << "      \"analytic_reference_signed_distance\": " << formatDouble(analytic_reference_result.signed_distance) << ",\n"
-                << "      \"selected_reference_signed_distance\": " << formatDouble(selected_reference_result.signed_distance) << ",\n"
-                << "      \"analytic_sdf_gap\": " << formatDouble(analytic_sdf_result.signed_gap) << ",\n"
-                << "      \"selected_sdf_gap\": " << formatDouble(selected_sdf_result.signed_gap) << ",\n"
-                << "      \"reference_gap_error\": " << formatDouble(reference_gap_error) << ",\n"
-                << "      \"sdf_gap_error\": " << formatDouble(sdf_gap_error) << ",\n"
-                << "      \"reference_normal_angle_error_deg\": " << formatDouble(reference_normal_angle_error) << ",\n"
-                << "      \"sdf_normal_angle_error_deg\": " << formatDouble(sdf_normal_angle_error) << ",\n"
-                << "      \"selected_reference_collision\": " << boolToString(selected_reference_result.collision) << ",\n"
-                << "      \"selected_sdf_valid_flags\": " << selected_sdf_result.valid_flags << ",\n"
-                << "      \"selected_reference_runtime_us\": " << formatDouble(selected_reference_runtime) << ",\n"
-                << "      \"selected_sdf_runtime_us\": " << formatDouble(selected_sdf_runtime) << "\n"
-                << "    }";
+      for (const ResolvedReferenceBackend& reference_backend : reference_backends) {
+        auto reference_engine = makeReferenceBackend(reference_backend);
+        const DistanceQueryResult reference_result = reference_engine->distance(sample.a, sample.b);
+        const double reference_runtime_us = averageRuntimeMicros(config.runtime_iterations, [&]() {
+          return reference_engine->distance(sample.a, sample.b).signed_distance;
+        });
 
-      report << "- `" << benchmark_case.name << "`: ref signed distance `"
-             << formatDouble(analytic_reference_result.signed_distance) << "` -> `"
-             << formatDouble(selected_reference_result.signed_distance) << "`, dual-SDF gap `"
-             << formatDouble(analytic_sdf_result.signed_gap) << "` -> `"
-             << formatDouble(selected_sdf_result.signed_gap) << "`, ref gap error `"
-             << formatDouble(reference_gap_error) << "`, sdf gap error `"
-             << formatDouble(sdf_gap_error) << "`, sdf normal angle error `"
-             << formatDouble(sdf_normal_angle_error) << " deg`\n";
-
-      last_selected_contact = selected_sdf_result;
-      const Vec3 relative_velocity_world = fromLocal(selected_sdf_result.frame(), {-0.8, 0.05, 0.0});
-      last_problem = builder.build(
-          selected_sdf_result,
-          {
-              1.0,
-              0.0,
-              relative_velocity_world,
-              0.4,
-              0.0,
-              1e-4,
-              "compare-backends-contact",
+        for (const ResolvedSdfBackend& sdf_backend : sdf_backends) {
+          auto sdf_a =
+              makeSdfProvider(sdf_backend, {"selected_a", sample.a, sample.voxel_size, sample.narrow_band_half_width});
+          auto sdf_b =
+              makeSdfProvider(sdf_backend, {"selected_b", sample.b, sample.voxel_size, sample.narrow_band_half_width});
+          const ContactKinematicsResult selected_contact = calculator.compute(*sdf_a, *sdf_b);
+          const double dual_sdf_runtime_us = averageRuntimeMicros(config.runtime_iterations, [&]() {
+            return calculator.compute(*sdf_a, *sdf_b).signed_gap;
           });
-      last_simple_result = simple_solver.solve(last_problem);
-      last_selected_solver_result = selected_solver->solve(last_problem);
+
+          for (const ResolvedSolverBackend& solver_backend : solver_backends) {
+            auto solver = makeSolverBackend(solver_backend);
+            SolverResult solver_result;
+            double solver_runtime_us = 0.0;
+
+            if (config.enable_solver_probe) {
+              const ContactProblem problem = builder.build(selected_contact, makeSolverParams(selected_contact));
+              solver_result = solver->solve(problem);
+              solver_runtime_us = averageRuntimeMicros(config.runtime_iterations, [&]() {
+                return solver->solve(problem).impulse[0];
+              });
+            } else {
+              solver_result.solver_name = solver->name();
+              solver_result.note = "Solver probe disabled by benchmark config.";
+            }
+
+            SampleRecord record;
+            record.timestamp_utc = utcTimestampNow();
+            record.benchmark_name = config.benchmark_name;
+            record.config_summary = benchmarkConfigSummary(config);
+            record.case_family = config.case_family;
+            record.case_name = sample.case_name;
+            record.sample_name = sample.sample_name;
+            record.shape_pair = sample.shape_pair;
+            record.sdf_backend = sdf_backend.selected_name;
+            record.sdf_provider_backend = sdf_a->backendName();
+            record.reference_backend = reference_backend.selected_name;
+            record.reference_engine_name = reference_engine->name();
+            record.solver_backend = solver_backend.selected_name;
+            record.solver_name = solver->name();
+            record.voxel_size = sample.voxel_size;
+            record.narrow_band_half_width = sample.narrow_band_half_width;
+            record.seed = sample.seed;
+            record.requested_gap = sample.requested_gap;
+            record.orientation_angle_deg = sample.orientation_angle_deg;
+            record.analytic_reference_distance = analytic_reference_result.distance;
+            record.analytic_reference_signed_distance = analytic_reference_result.signed_distance;
+            record.reference_distance = reference_result.distance;
+            record.reference_signed_distance = reference_result.signed_distance;
+            record.analytic_signed_gap = analytic_sdf_result.signed_gap;
+            record.signed_gap = selected_contact.signed_gap;
+            record.gap_error = selected_contact.signed_gap - reference_result.signed_distance;
+            record.absolute_gap_error = std::abs(record.gap_error);
+            record.relative_gap_error = record.absolute_gap_error /
+                                        std::max(std::abs(reference_result.signed_distance), sample.voxel_size);
+            record.sdf_gap_error_vs_analytic = selected_contact.signed_gap - analytic_sdf_result.signed_gap;
+            record.reference_gap_error_vs_analytic =
+                reference_result.signed_distance - analytic_reference_result.signed_distance;
+            record.normal_angle_error_deg = apps::normalAngleDegrees(selected_contact.normal, reference_result.normal);
+            record.sdf_normal_angle_error_vs_analytic_deg =
+                apps::normalAngleDegrees(analytic_sdf_result.normal, selected_contact.normal);
+            record.reference_normal_angle_error_vs_analytic_deg =
+                apps::normalAngleDegrees(analytic_reference_result.normal, reference_result.normal);
+            record.symmetry_residual = selected_contact.symmetry_residual;
+            record.tangent_orthogonality_residual = selected_contact.tangent_orthogonality;
+            record.point_distance_consistency = pointDistanceConsistency(selected_contact);
+            record.invalid_result_count = invalidContact(selected_contact) ? 1 : 0;
+            record.degenerate_normal_count =
+                selected_contact.hasFlag(ContactUsedFallbackNormal) ? 1 : 0;
+            record.tangent_frame_fallback_count =
+                selected_contact.hasFlag(ContactValidTangents) ? 0 : 1;
+            record.narrow_band_edge_hit_count =
+                selected_contact.hasFlag(ContactNearNarrowBandBoundary) ? 1 : 0;
+            record.gradient_consistent_flag =
+                selected_contact.hasFlag(ContactGradientsConsistent) ? 1 : 0;
+            record.analytic_reference_runtime_us = analytic_reference_runtime_us;
+            record.reference_runtime_us = reference_runtime_us;
+            record.analytic_sdf_runtime_us = analytic_sdf_runtime_us;
+            record.dual_sdf_runtime_us = dual_sdf_runtime_us;
+            record.solver_runtime_us = solver_runtime_us;
+            record.runtime_total_us = reference_runtime_us + dual_sdf_runtime_us + solver_runtime_us;
+            record.normal_impulse = solver_result.impulse[0];
+            record.tangential_impulse_magnitude =
+                std::sqrt(solver_result.impulse[1] * solver_result.impulse[1] +
+                          solver_result.impulse[2] * solver_result.impulse[2]);
+            record.solver_residual = solver_result.residual;
+            record.solver_iterations = static_cast<double>(solver_result.iterations);
+            record.solver_success_flag = solver_result.converged ? 1 : 0;
+            records.push_back(std::move(record));
+          }
+        }
+      }
     }
 
-    json_rows << "\n  ]";
+    std::vector<std::vector<std::string>> sample_rows;
+    sample_rows.reserve(records.size());
+    JsonValue::Array sample_json_rows;
+    for (const SampleRecord& record : records) {
+      sample_rows.push_back({
+          record.timestamp_utc,
+          record.benchmark_name,
+          record.case_family,
+          record.case_name,
+          record.sample_name,
+          record.shape_pair,
+          record.sdf_backend,
+          record.sdf_provider_backend,
+          record.reference_backend,
+          record.reference_engine_name,
+          record.solver_backend,
+          record.solver_name,
+          formatDouble(record.voxel_size),
+          formatDouble(record.narrow_band_half_width),
+          std::to_string(record.seed),
+          formatDouble(record.requested_gap),
+          formatDouble(record.orientation_angle_deg),
+          formatDouble(record.analytic_reference_signed_distance),
+          formatDouble(record.reference_signed_distance),
+          formatDouble(record.analytic_signed_gap),
+          formatDouble(record.signed_gap),
+          formatDouble(record.gap_error),
+          formatDouble(record.absolute_gap_error),
+          formatDouble(record.relative_gap_error),
+          formatDouble(record.sdf_gap_error_vs_analytic),
+          formatDouble(record.reference_gap_error_vs_analytic),
+          formatDouble(record.normal_angle_error_deg),
+          formatDouble(record.sdf_normal_angle_error_vs_analytic_deg),
+          formatDouble(record.reference_normal_angle_error_vs_analytic_deg),
+          formatDouble(record.symmetry_residual),
+          formatDouble(record.tangent_orthogonality_residual),
+          formatDouble(record.point_distance_consistency),
+          std::to_string(record.invalid_result_count),
+          std::to_string(record.degenerate_normal_count),
+          std::to_string(record.tangent_frame_fallback_count),
+          std::to_string(record.narrow_band_edge_hit_count),
+          formatDouble(record.reference_runtime_us),
+          formatDouble(record.dual_sdf_runtime_us),
+          formatDouble(record.solver_runtime_us),
+          formatDouble(record.runtime_total_us),
+          formatDouble(record.normal_impulse),
+          formatDouble(record.tangential_impulse_magnitude),
+          formatDouble(record.solver_residual),
+          formatDouble(record.solver_iterations),
+          std::to_string(record.solver_success_flag),
+      });
+      sample_json_rows.push_back(sampleRecordValue(record));
+    }
 
     apps::writeCsv(
-        output_dir / "summary.csv",
-        {"case", "analytic_reference_distance", "selected_reference_distance", "analytic_reference_signed_distance",
-         "selected_reference_signed_distance", "analytic_sdf_gap", "selected_sdf_gap", "reference_gap_error",
-         "sdf_gap_error", "reference_normal_angle_error_deg", "sdf_normal_angle_error_deg",
-         "analytic_reference_runtime_us", "selected_reference_runtime_us", "analytic_sdf_runtime_us",
-         "selected_sdf_runtime_us"},
-        csv_rows);
+        benchmark_output_dir / "samples.csv",
+        {"timestamp_utc",       "benchmark_name",          "case_family",         "case_name",
+         "sample_name",         "shape_pair",              "sdf_backend",         "sdf_provider_backend",
+         "reference_backend",   "reference_engine_name",   "solver_backend",      "solver_name",
+         "voxel_size",          "narrow_band_half_width",  "seed",                "requested_gap",
+         "orientation_angle_deg", "analytic_reference_signed_distance", "reference_signed_distance",
+         "analytic_signed_gap", "signed_gap", "gap_error", "absolute_gap_error", "relative_gap_error",
+         "sdf_gap_error_vs_analytic", "reference_gap_error_vs_analytic", "normal_angle_error_deg",
+         "sdf_normal_angle_error_vs_analytic_deg", "reference_normal_angle_error_vs_analytic_deg",
+         "symmetry_residual",
+         "tangent_orthogonality_residual", "point_distance_consistency", "invalid_result_count",
+         "degenerate_normal_count", "tangent_frame_fallback_count", "narrow_band_edge_hit_count",
+         "reference_runtime_us", "dual_sdf_runtime_us",    "solver_runtime_us",   "runtime_total_us",
+         "normal_impulse",      "tangential_impulse_magnitude", "solver_residual", "solver_iterations",
+         "solver_success_flag"},
+        sample_rows);
 
-    std::ostringstream summary;
-    summary << "{\n"
-            << "  \"example\": " << quoteJson(example_name) << ",\n"
-            << "  \"selected_sdf_backend\": " << quoteJson(selected_sdf_backend.selected_name) << ",\n"
-            << "  \"selected_reference_backend\": " << quoteJson(selected_reference_backend.selected_name) << ",\n"
-            << "  \"selected_solver_backend\": " << quoteJson(solver_backend.selected_name) << ",\n"
-            << "  \"real_backends_available\": " << apps::backendListJson(availability) << ",\n"
-            << "  \"selected_sdf_note\": " << quoteJson(selected_sdf_backend.note) << ",\n"
-            << "  \"selected_reference_note\": " << quoteJson(selected_reference_backend.note) << ",\n"
-            << "  \"selected_solver_note\": " << quoteJson(solver_backend.note) << ",\n"
-            << json_rows.str() << ",\n"
-            << "  \"solver_probe\": {\n"
-            << "    \"signed_gap\": " << formatDouble(last_problem.geometry.signed_gap) << ",\n"
-            << "    \"normal\": " << apps::vec3Json(last_selected_contact.normal) << ",\n"
-            << "    \"simple_solver_normal_impulse\": " << formatDouble(last_simple_result.impulse[0]) << ",\n"
-            << "    \"selected_solver_normal_impulse\": " << formatDouble(last_selected_solver_result.impulse[0]) << ",\n"
-            << "    \"selected_solver_name\": " << quoteJson(selected_solver->name()) << "\n"
-            << "  }\n"
-            << "}\n";
-    writeTextFile(output_dir / "summary.json", summary.str());
-    writeTextFile(output_dir / "report.md", report.str());
+    std::map<std::string, std::vector<const SampleRecord*>> grouped_records;
+    for (const SampleRecord& record : records) {
+      const std::string key = record.case_family + "|" + record.case_name + "|" + record.shape_pair + "|" +
+                              record.sdf_backend + "|" + record.reference_backend + "|" + record.solver_backend + "|" +
+                              formatDouble(record.voxel_size) + "|" + formatDouble(record.narrow_band_half_width);
+      grouped_records[key].push_back(&record);
+    }
 
-    std::cout << example_name << ": reference_backend=" << selected_reference_backend.selected_name
-              << ", sdf_backend=" << selected_sdf_backend.selected_name
-              << ", solver_backend=" << solver_backend.selected_name << "\n";
+    std::vector<std::vector<std::string>> summary_rows;
+    JsonValue::Array summary_json_rows;
+    std::ostringstream report;
+    report << "# " << config.benchmark_name << "\n\n"
+           << "- Case family: `" << config.case_family << "`\n"
+           << "- Config summary: `" << benchmarkConfigSummary(config) << "`\n"
+           << "- Samples: `" << records.size() << "`\n";
+    if (!skipped_backend_notes.empty()) {
+      report << "- Skipped backends: ";
+      for (std::size_t index = 0; index < skipped_backend_notes.size(); ++index) {
+        if (index > 0) {
+          report << "; ";
+        }
+        report << "`" << skipped_backend_notes[index] << "`";
+      }
+      report << "\n";
+    }
+    report << "\n## Aggregate Summary\n\n";
+
+    for (const auto& [key, values] : grouped_records) {
+      (void)key;
+      const SampleRecord& first = *values.front();
+      auto collect = [&](const auto& accessor) {
+        std::vector<double> series;
+        series.reserve(values.size());
+        for (const SampleRecord* record : values) {
+          series.push_back(accessor(*record));
+        }
+        return summarize(series);
+      };
+      const NumericSummary signed_gap = collect([](const SampleRecord& record) { return record.signed_gap; });
+      const NumericSummary reference_signed_distance =
+          collect([](const SampleRecord& record) { return record.reference_signed_distance; });
+      const NumericSummary gap_error = collect([](const SampleRecord& record) { return record.gap_error; });
+      const NumericSummary absolute_gap_error =
+          collect([](const SampleRecord& record) { return record.absolute_gap_error; });
+      const NumericSummary relative_gap_error =
+          collect([](const SampleRecord& record) { return record.relative_gap_error; });
+      const NumericSummary sdf_gap_error_vs_analytic =
+          collect([](const SampleRecord& record) { return record.sdf_gap_error_vs_analytic; });
+      const NumericSummary reference_gap_error_vs_analytic =
+          collect([](const SampleRecord& record) { return record.reference_gap_error_vs_analytic; });
+      const NumericSummary normal_angle_error =
+          collect([](const SampleRecord& record) { return record.normal_angle_error_deg; });
+      const NumericSummary sdf_normal_angle_error_vs_analytic =
+          collect([](const SampleRecord& record) { return record.sdf_normal_angle_error_vs_analytic_deg; });
+      const NumericSummary reference_normal_angle_error_vs_analytic =
+          collect([](const SampleRecord& record) { return record.reference_normal_angle_error_vs_analytic_deg; });
+      const NumericSummary symmetry_residual =
+          collect([](const SampleRecord& record) { return record.symmetry_residual; });
+      const NumericSummary tangent_orthogonality =
+          collect([](const SampleRecord& record) { return record.tangent_orthogonality_residual; });
+      const NumericSummary point_distance =
+          collect([](const SampleRecord& record) { return record.point_distance_consistency; });
+      const NumericSummary runtime_total =
+          collect([](const SampleRecord& record) { return record.runtime_total_us; });
+      const NumericSummary runtime_reference =
+          collect([](const SampleRecord& record) { return record.reference_runtime_us; });
+      const NumericSummary runtime_sdf =
+          collect([](const SampleRecord& record) { return record.dual_sdf_runtime_us; });
+      const NumericSummary solver_residual =
+          collect([](const SampleRecord& record) { return record.solver_residual; });
+      const NumericSummary solver_iterations =
+          collect([](const SampleRecord& record) { return record.solver_iterations; });
+      const NumericSummary normal_impulse =
+          collect([](const SampleRecord& record) { return record.normal_impulse; });
+      const NumericSummary tangential_impulse =
+          collect([](const SampleRecord& record) { return record.tangential_impulse_magnitude; });
+
+      int invalid_result_count = 0;
+      int degenerate_normal_count = 0;
+      int tangent_frame_fallback_count = 0;
+      int narrow_band_edge_hit_count = 0;
+      int solver_success_count = 0;
+      double batch_total_runtime_us = 0.0;
+      for (const SampleRecord* record : values) {
+        invalid_result_count += record->invalid_result_count;
+        degenerate_normal_count += record->degenerate_normal_count;
+        tangent_frame_fallback_count += record->tangent_frame_fallback_count;
+        narrow_band_edge_hit_count += record->narrow_band_edge_hit_count;
+        solver_success_count += record->solver_success_flag;
+        batch_total_runtime_us += record->runtime_total_us;
+      }
+      const double solver_success_rate =
+          static_cast<double>(solver_success_count) / static_cast<double>(values.size());
+
+      summary_rows.push_back({
+          first.benchmark_name,
+          first.case_family,
+          first.case_name,
+          first.shape_pair,
+          first.sdf_backend,
+          first.reference_backend,
+          first.solver_backend,
+          formatDouble(first.voxel_size),
+          formatDouble(first.narrow_band_half_width),
+          std::to_string(values.size()),
+          std::to_string(invalid_result_count),
+          std::to_string(degenerate_normal_count),
+          std::to_string(tangent_frame_fallback_count),
+          std::to_string(narrow_band_edge_hit_count),
+          formatDouble(signed_gap.mean),
+          formatDouble(reference_signed_distance.mean),
+          formatDouble(gap_error.mean),
+          formatDouble(absolute_gap_error.mean),
+          formatDouble(relative_gap_error.mean),
+          formatDouble(sdf_gap_error_vs_analytic.mean),
+          formatDouble(reference_gap_error_vs_analytic.mean),
+          formatDouble(normal_angle_error.mean),
+          formatDouble(sdf_normal_angle_error_vs_analytic.mean),
+          formatDouble(reference_normal_angle_error_vs_analytic.mean),
+          formatDouble(symmetry_residual.mean),
+          formatDouble(tangent_orthogonality.mean),
+          formatDouble(point_distance.mean),
+          formatDouble(runtime_reference.mean),
+          formatDouble(runtime_sdf.mean),
+          formatDouble(runtime_total.mean),
+          formatDouble(runtime_total.median),
+          formatDouble(runtime_total.p95),
+          formatDouble(batch_total_runtime_us),
+          formatDouble(normal_impulse.mean),
+          formatDouble(tangential_impulse.mean),
+          formatDouble(solver_residual.mean),
+          formatDouble(solver_iterations.mean),
+          formatDouble(solver_success_rate),
+      });
+
+      summary_json_rows.push_back(JsonValue::Object{
+          {"absolute_gap_error", numericSummaryValue(absolute_gap_error)},
+          {"batch_total_runtime_us", batch_total_runtime_us},
+          {"benchmark_name", first.benchmark_name},
+          {"case_family", first.case_family},
+          {"case_name", first.case_name},
+          {"degenerate_normal_count", degenerate_normal_count},
+          {"gap_error", numericSummaryValue(gap_error)},
+          {"invalid_result_count", invalid_result_count},
+          {"narrow_band_edge_hit_count", narrow_band_edge_hit_count},
+          {"narrow_band_half_width", first.narrow_band_half_width},
+          {"normal_angle_error_deg", numericSummaryValue(normal_angle_error)},
+          {"normal_impulse", numericSummaryValue(normal_impulse)},
+          {"point_distance_consistency", numericSummaryValue(point_distance)},
+          {"reference_backend", first.reference_backend},
+          {"reference_gap_error_vs_analytic", numericSummaryValue(reference_gap_error_vs_analytic)},
+          {"reference_normal_angle_error_vs_analytic_deg",
+           numericSummaryValue(reference_normal_angle_error_vs_analytic)},
+          {"reference_runtime_us", numericSummaryValue(runtime_reference)},
+          {"reference_signed_distance", numericSummaryValue(reference_signed_distance)},
+          {"relative_gap_error", numericSummaryValue(relative_gap_error)},
+          {"sample_count", static_cast<int>(values.size())},
+          {"sdf_backend", first.sdf_backend},
+          {"sdf_gap_error_vs_analytic", numericSummaryValue(sdf_gap_error_vs_analytic)},
+          {"sdf_normal_angle_error_vs_analytic_deg", numericSummaryValue(sdf_normal_angle_error_vs_analytic)},
+          {"shape_pair", first.shape_pair},
+          {"signed_gap", numericSummaryValue(signed_gap)},
+          {"solver_backend", first.solver_backend},
+          {"solver_iterations", numericSummaryValue(solver_iterations)},
+          {"solver_residual", numericSummaryValue(solver_residual)},
+          {"solver_success_rate", solver_success_rate},
+          {"symmetry_residual", numericSummaryValue(symmetry_residual)},
+          {"tangent_frame_fallback_count", tangent_frame_fallback_count},
+          {"tangent_orthogonality_residual", numericSummaryValue(tangent_orthogonality)},
+          {"tangential_impulse_magnitude", numericSummaryValue(tangential_impulse)},
+          {"total_runtime_us", numericSummaryValue(runtime_total)},
+          {"voxel_size", first.voxel_size},
+      });
+
+      report << "- `" << first.case_name << "` / `sdf=" << first.sdf_backend << "` / `reference="
+             << first.reference_backend << "` / `solver=" << first.solver_backend << "` / `voxel="
+             << formatDouble(first.voxel_size, 3) << "` / `nb=" << formatDouble(first.narrow_band_half_width, 1)
+             << "`: mean abs gap error `" << formatDouble(absolute_gap_error.mean)
+             << "`, mean normal angle error `" << formatDouble(normal_angle_error.mean)
+             << " deg`, mean runtime `" << formatDouble(runtime_total.mean) << " us`\n";
+    }
+
+    apps::writeCsv(
+        benchmark_output_dir / "summary.csv",
+        {"benchmark_name", "case_family", "case_name", "shape_pair", "sdf_backend", "reference_backend",
+         "solver_backend", "voxel_size", "narrow_band_half_width", "sample_count", "invalid_result_count",
+         "degenerate_normal_count", "tangent_frame_fallback_count", "narrow_band_edge_hit_count",
+         "signed_gap_mean", "reference_signed_distance_mean", "gap_error_mean", "absolute_gap_error_mean",
+         "relative_gap_error_mean", "sdf_gap_error_vs_analytic_mean",
+         "reference_gap_error_vs_analytic_mean", "normal_angle_error_deg_mean",
+         "sdf_normal_angle_error_vs_analytic_deg_mean",
+         "reference_normal_angle_error_vs_analytic_deg_mean", "symmetry_residual_mean",
+         "tangent_orthogonality_residual_mean", "point_distance_consistency_mean", "reference_runtime_us_mean",
+         "dual_sdf_runtime_us_mean", "runtime_total_us_mean", "runtime_total_us_median",
+         "runtime_total_us_p95", "batch_total_runtime_us", "normal_impulse_mean",
+         "tangential_impulse_magnitude_mean", "solver_residual_mean", "solver_iterations_mean",
+         "solver_success_rate"},
+        summary_rows);
+
+    const JsonValue resolved_config_json = baseline::json::parse(benchmarkConfigToJson(config));
+    JsonValue::Array resolved_sdf_backends;
+    for (const auto& backend : sdf_backends) {
+      resolved_sdf_backends.emplace_back(backend.selected_name);
+    }
+    JsonValue::Array resolved_reference_backends;
+    for (const auto& backend : reference_backends) {
+      resolved_reference_backends.emplace_back(backend.selected_name);
+    }
+    JsonValue::Array resolved_solver_backends;
+    for (const auto& backend : solver_backends) {
+      resolved_solver_backends.emplace_back(backend.selected_name);
+    }
+    JsonValue::Array skipped_json;
+    for (const std::string& note : skipped_backend_notes) {
+      skipped_json.emplace_back(note);
+    }
+
+    writeTextFile(
+        benchmark_output_dir / "config_resolved.json",
+        json::stringify(JsonValue::Object{
+            {"config", resolved_config_json},
+            {"config_path", config_path.string()},
+            {"config_summary", benchmarkConfigSummary(config)},
+            {"resolved_reference_backends", resolved_reference_backends},
+            {"resolved_sdf_backends", resolved_sdf_backends},
+            {"resolved_solver_backends", resolved_solver_backends},
+            {"skipped_backends", skipped_json},
+            {"timestamp_utc", utcTimestampNow()},
+        }) +
+            "\n");
+
+    writeTextFile(
+        benchmark_output_dir / "environment.json",
+        json::stringify(JsonValue::Object{
+            {"active_backends",
+             JsonValue::Object{
+                 {"reference", resolved_reference_backends},
+                 {"sdf", resolved_sdf_backends},
+                 {"solver", resolved_solver_backends},
+             }},
+            {"cmake_generator", BASELINE_CMAKE_GENERATOR},
+            {"compiler",
+             JsonValue::Object{
+                 {"id", BASELINE_CXX_COMPILER_ID},
+                 {"version", BASELINE_CXX_COMPILER_VERSION},
+             }},
+            {"dependency_availability",
+             JsonValue::Object{
+                 {"fcl", availability.fcl_available},
+                 {"hppfcl", availability.hppfcl_available},
+                 {"nanovdb", availability.nanovdb_available},
+                 {"openvdb", availability.openvdb_available},
+                 {"siconos", availability.siconos_available},
+             }},
+            {"fallback_enabled",
+             JsonValue::Object{
+                 {"reference", availability.force_fallback_reference},
+                 {"sdf", availability.force_fallback_sdf},
+                 {"solver", availability.force_simple_solver},
+             }},
+            {"platform_track", availability.platform_track},
+            {"timestamp_utc", utcTimestampNow()},
+        }) +
+            "\n");
+
+    writeTextFile(benchmark_output_dir / "report.md", report.str());
+    writeTextFile(
+        benchmark_output_dir / "summary.json",
+        json::stringify(JsonValue::Object{
+            {"benchmark_name", config.benchmark_name},
+            {"case_family", config.case_family},
+            {"config_summary", benchmarkConfigSummary(config)},
+            {"sample_count", static_cast<int>(records.size())},
+            {"samples", sample_json_rows},
+            {"skipped_backends", skipped_json},
+            {"summary_rows", summary_json_rows},
+            {"timestamp_utc", utcTimestampNow()},
+        }) +
+            "\n");
+
+    std::cout << example_name << ": benchmark=" << config.benchmark_name << ", samples=" << records.size()
+              << ", output_dir=" << benchmark_output_dir.string() << "\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "ex05_compare_backends failed: " << error.what() << "\n";

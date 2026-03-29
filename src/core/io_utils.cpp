@@ -1,6 +1,7 @@
 #include "baseline/core/io_utils.h"
 
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -57,6 +58,16 @@ void writeTextFile(const std::filesystem::path& path, const std::string& content
   stream << content;
 }
 
+std::string readTextFile(const std::filesystem::path& path) {
+  std::ifstream stream(path, std::ios::binary);
+  if (!stream) {
+    throw std::runtime_error("Failed to open file for reading: " + path.string());
+  }
+  std::ostringstream buffer;
+  buffer << stream.rdbuf();
+  return buffer.str();
+}
+
 std::string quoteJson(std::string_view text) {
   std::string escaped;
   escaped.reserve(text.size() + 2);
@@ -94,5 +105,18 @@ std::string formatDouble(double value, int precision) {
 }
 
 std::string boolToString(bool value) { return value ? "true" : "false"; }
+
+std::string utcTimestampNow() {
+  const std::time_t now = std::time(nullptr);
+  std::tm utc_time = {};
+#ifdef _WIN32
+  gmtime_s(&utc_time, &now);
+#else
+  gmtime_r(&now, &utc_time);
+#endif
+  char buffer[32] = {};
+  std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc_time);
+  return std::string(buffer);
+}
 
 }  // namespace baseline

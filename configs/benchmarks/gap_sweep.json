@@ -1,0 +1,31 @@
+{
+  "benchmark_name": "gap_sweep",
+  "case_family": "gap_sweep",
+  "description": "Gap sweep centered around separation, near-contact, and mild penetration.",
+  "sdf_backends": ["analytic", "openvdb"],
+  "reference_backends": ["analytic", "fcl"],
+  "solver_backends": ["simple"],
+  "voxel_sizes": [0.10, 0.06],
+  "narrow_band_half_widths": [2.0, 4.0, 8.0],
+  "runtime_iterations": 16,
+  "enable_solver_probe": true,
+  "seed": 11,
+  "gap_values": [-0.05, -0.01, 0.00, 0.01, 0.05],
+  "base_case": {
+    "name": "sphere_box_gap_base",
+    "gap_axis": [1.0, 0.0, 0.0],
+    "a": {
+      "name": "sphere_a",
+      "type": "sphere",
+      "center": [0.0, 0.0, 0.0],
+      "radius": 0.8
+    },
+    "b": {
+      "name": "box_b",
+      "type": "box",
+      "center": [1.25, 0.05, 0.0],
+      "half_extents": [0.42, 0.50, 0.35],
+      "rotation_rpy_deg": [0.0, 0.0, 0.0]
+    }
+  }
+}

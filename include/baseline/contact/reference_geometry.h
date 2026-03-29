@@ -18,15 +18,25 @@ struct ReferenceGeometry {
   Vec3 half_extents{0.5, 0.5, 0.5};
   double radius{0.5};
   Vec3 plane_normal{0.0, 1.0, 0.0};
+  Mat3 rotation{identityMat3()};
 
   static ReferenceGeometry makeSphere(std::string name, const Vec3& center, double radius);
   static ReferenceGeometry makeBox(std::string name, const Vec3& center, const Vec3& half_extents);
+  static ReferenceGeometry makeBox(std::string name,
+                                   const Vec3& center,
+                                   const Vec3& half_extents,
+                                   const Mat3& rotation);
   static ReferenceGeometry makePlane(std::string name, const Vec3& point, const Vec3& normal);
 
   double signedDistance(const Vec3& query) const;
   Vec3 closestPoint(const Vec3& query) const;
   Vec3 normalAt(const Vec3& query) const;
   double boundingRadius() const;
+  Vec3 toLocalPoint(const Vec3& world_point) const;
+  Vec3 toWorldPoint(const Vec3& local_point) const;
+  Vec3 toLocalDirection(const Vec3& world_direction) const;
+  Vec3 toWorldDirection(const Vec3& local_direction) const;
+  bool hasIdentityRotation(double tolerance = 1e-9) const;
 };
 
 struct DistanceQueryResult {

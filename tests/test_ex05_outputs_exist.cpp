@@ -46,16 +46,20 @@ std::string readFile(const std::filesystem::path& path) {
 
 int main() {
   const auto executable = findExecutable("ex05_compare_backends");
-  const std::string command = "\"" + executable.string() + "\"";
+  const auto config_path = baseline::sourceDir() / "configs" / "benchmarks" / "primitive_smoke.json";
+  const auto output_root = baseline::sourceDir() / "outputs" / "test_ex05_outputs_exist";
+  const std::string command =
+      "\"" + executable.string() + "\" --config \"" + config_path.string() + "\" --output-dir \"" +
+      output_root.string() + "\"";
   if (std::system(command.c_str()) != 0) {
     std::cerr << "Failed to run ex05_compare_backends.\n";
     return 1;
   }
 
-  const auto output_root = baseline::sourceDir() / "outputs" / "ex05_compare_backends";
-  const auto summary_csv = output_root / "summary.csv";
-  const auto summary_json = output_root / "summary.json";
-  const auto report_md = output_root / "report.md";
+  const auto benchmark_dir = output_root / "primitive_smoke";
+  const auto summary_csv = benchmark_dir / "summary.csv";
+  const auto summary_json = benchmark_dir / "summary.json";
+  const auto report_md = benchmark_dir / "report.md";
 
   if (!std::filesystem::exists(summary_csv) || !std::filesystem::exists(summary_json) ||
       !std::filesystem::exists(report_md)) {
@@ -65,9 +69,9 @@ int main() {
 
   const std::string json_content = readFile(summary_json);
   const std::string report_content = readFile(report_md);
-  if (json_content.find("\"cases\"") == std::string::npos ||
-      json_content.find("\"selected_reference_backend\"") == std::string::npos ||
-      report_content.find("Case Summary") == std::string::npos) {
+  if (json_content.find("\"summary_rows\"") == std::string::npos ||
+      json_content.find("\"sample_count\"") == std::string::npos ||
+      report_content.find("Aggregate Summary") == std::string::npos) {
     std::cerr << "ex05 outputs are missing expected content.\n";
     return 1;
   }

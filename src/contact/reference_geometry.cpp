@@ -5,6 +5,7 @@
 #include <cmath>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #if BASELINE_REAL_FCL_AVAILABLE
 #include <fcl/fcl.h>
@@ -22,6 +23,20 @@ Vec3 clampVec(const Vec3& value, const Vec3& lower, const Vec3& upper) {
       clamp(value.y, lower.y, upper.y),
       clamp(value.z, lower.z, upper.z),
   };
+}
+
+std::vector<Vec3> boxCorners(const ReferenceGeometry& box) {
+  std::vector<Vec3> corners;
+  corners.reserve(8);
+  for (int sx : {-1, 1}) {
+    for (int sy : {-1, 1}) {
+      for (int sz : {-1, 1}) {
+        corners.push_back(box.toWorldPoint(
+            {sx * box.half_extents.x, sy * box.half_extents.y, sz * box.half_extents.z}));
+      }
+    }
+  }
+  return corners;
 }
 
 DistanceQueryResult makeDistanceResult(bool collision,
@@ -81,6 +96,50 @@ DistanceQueryResult sphereBoxDistance(const ReferenceGeometry& sphere,
 DistanceQueryResult boxBoxDistance(const ReferenceGeometry& a,
                                    const ReferenceGeometry& b,
                                    std::string backend_name) {
+  if (!a.hasIdentityRotation() || !b.hasIdentityRotation()) {
+    Vec3 best_point_a = a.closestPoint(b.center);
+    Vec3 best_point_b = b.closestPoint(a.center);
+    double best_distance_sq = squaredNorm(best_point_b - best_point_a);
+
+    for (const Vec3& corner : boxCorners(a)) {
+      const Vec3 point_b = b.closestPoint(corner);
+      const double distance_sq = squaredNorm(point_b - corner);
+      if (distance_sq < best_distance_sq) {
+        best_distance_sq = distance_sq;
+        best_point_a = corner;
+        best_point_b = point_b;
+      }
+    }
+    for (const Vec3& corner : boxCorners(b)) {
+      const Vec3 point_a = a.closestPoint(corner);
+      const double distance_sq = squaredNorm(corner - point_a);
+      if (distance_sq < best_distance_sq) {
+        best_distance_sq = distance_sq;
+        best_point_a = point_a;
+        best_point_b = corner;
+      }
+    }
+
+    const bool overlap = a.signedDistance(b.center) <= 0.0 || b.signedDistance(a.center) <= 0.0;
+    const Vec3 fallback_normal = normalized(b.center - a.center, {1.0, 0.0, 0.0});
+    const Vec3 normal = normalized(best_point_b - best_point_a, fallback_normal);
+    if (overlap) {
+      auto result = makeGenericResult(a, b, std::move(backend_name));
+      result.closest_point_a = best_point_a;
+      result.closest_point_b = best_point_b;
+      result.normal = normal;
+      if (result.signed_distance > 0.0) {
+        result.distance = 0.0;
+        result.signed_distance = -std::sqrt(best_distance_sq);
+        result.collision = true;
+      }
+      return result;
+    }
+    const double signed_gap = dot(best_point_b - best_point_a, normal);
+    return makeDistanceResult(
+        signed_gap <= 0.0, signed_gap, normal, best_point_a, best_point_b, std::move(backend_name));
+  }
+
   const Vec3 delta = b.center - a.center;
   const Vec3 combined = a.half_extents + b.half_extents;
   const Vec3 separation{
@@ -166,6 +225,9 @@ std::optional<FclShapeInstance> makeFclShape(const ReferenceGeometry& geometry) 
   FclShapeInstance shape;
   shape.transform = fcl::Transform3d::Identity();
   shape.transform.translation() = toFcl(geometry.center);
+  shape.transform.linear() << geometry.rotation[0][0], geometry.rotation[0][1], geometry.rotation[0][2],
+      geometry.rotation[1][0], geometry.rotation[1][1], geometry.rotation[1][2], geometry.rotation[2][0],
+      geometry.rotation[2][1], geometry.rotation[2][2];
 
   if (geometry.type == ShapeType::Sphere) {
     shape.geometry = std::make_shared<fcl::Sphered>(geometry.radius);
@@ -240,12 +302,20 @@ ReferenceGeometry ReferenceGeometry::makeSphere(std::string name, const Vec3& ce
 }
 
 ReferenceGeometry ReferenceGeometry::makeBox(std::string name, const Vec3& center, const Vec3& half_extents) {
+  return makeBox(std::move(name), center, half_extents, identityMat3());
+}
+
+ReferenceGeometry ReferenceGeometry::makeBox(std::string name,
+                                             const Vec3& center,
+                                             const Vec3& half_extents,
+                                             const Mat3& rotation) {
   ReferenceGeometry geometry;
   geometry.name = std::move(name);
   geometry.type = ShapeType::Box;
   geometry.center = center;
   geometry.half_extents = half_extents;
   geometry.radius = 0.0;
+  geometry.rotation = rotation;
   return geometry;
 }
 
@@ -268,7 +338,7 @@ double ReferenceGeometry::signedDistance(const Vec3& query) const {
     return dot(query - center, plane_normal);
   }
 
-  const Vec3 local = query - center;
+  const Vec3 local = toLocalPoint(query);
   const Vec3 q = absVec(local) - half_extents;
   const Vec3 outside{std::max(q.x, 0.0), std::max(q.y, 0.0), std::max(q.z, 0.0)};
   const double outside_distance = norm(outside);
@@ -284,18 +354,19 @@ Vec3 ReferenceGeometry::closestPoint(const Vec3& query) const {
     return query - plane_normal * signedDistance(query);
   }
 
-  const Vec3 lower = center - half_extents;
-  const Vec3 upper = center + half_extents;
-  Vec3 point = clampVec(query, lower, upper);
+  const Vec3 local_query = toLocalPoint(query);
+  const Vec3 lower = -half_extents;
+  const Vec3 upper = half_extents;
+  Vec3 point = clampVec(local_query, lower, upper);
 
   if (signedDistance(query) < 0.0) {
     const std::array<double, 3> distances = {
-        std::abs(upper.x - query.x) < std::abs(query.x - lower.x) ? std::abs(upper.x - query.x)
-                                                                  : std::abs(query.x - lower.x),
-        std::abs(upper.y - query.y) < std::abs(query.y - lower.y) ? std::abs(upper.y - query.y)
-                                                                  : std::abs(query.y - lower.y),
-        std::abs(upper.z - query.z) < std::abs(query.z - lower.z) ? std::abs(upper.z - query.z)
-                                                                  : std::abs(query.z - lower.z),
+        std::abs(upper.x - local_query.x) < std::abs(local_query.x - lower.x) ? std::abs(upper.x - local_query.x)
+                                                                               : std::abs(local_query.x - lower.x),
+        std::abs(upper.y - local_query.y) < std::abs(local_query.y - lower.y) ? std::abs(upper.y - local_query.y)
+                                                                               : std::abs(local_query.y - lower.y),
+        std::abs(upper.z - local_query.z) < std::abs(local_query.z - lower.z) ? std::abs(upper.z - local_query.z)
+                                                                               : std::abs(local_query.z - lower.z),
     };
     int axis = 0;
     if (distances[1] < distances[axis]) {
@@ -305,20 +376,20 @@ Vec3 ReferenceGeometry::closestPoint(const Vec3& query) const {
       axis = 2;
     }
     if (axis == 0) {
-      point.x = (std::abs(upper.x - query.x) < std::abs(query.x - lower.x)) ? upper.x : lower.x;
-      point.y = query.y;
-      point.z = query.z;
+      point.x = (std::abs(upper.x - local_query.x) < std::abs(local_query.x - lower.x)) ? upper.x : lower.x;
+      point.y = local_query.y;
+      point.z = local_query.z;
     } else if (axis == 1) {
-      point.x = query.x;
-      point.y = (std::abs(upper.y - query.y) < std::abs(query.y - lower.y)) ? upper.y : lower.y;
-      point.z = query.z;
+      point.x = local_query.x;
+      point.y = (std::abs(upper.y - local_query.y) < std::abs(local_query.y - lower.y)) ? upper.y : lower.y;
+      point.z = local_query.z;
     } else {
-      point.x = query.x;
-      point.y = query.y;
-      point.z = (std::abs(upper.z - query.z) < std::abs(query.z - lower.z)) ? upper.z : lower.z;
+      point.x = local_query.x;
+      point.y = local_query.y;
+      point.z = (std::abs(upper.z - local_query.z) < std::abs(local_query.z - lower.z)) ? upper.z : lower.z;
     }
   }
-  return point;
+  return toWorldPoint(point);
 }
 
 Vec3 ReferenceGeometry::normalAt(const Vec3& query) const {
@@ -333,7 +404,7 @@ Vec3 ReferenceGeometry::normalAt(const Vec3& query) const {
     return normalized(query - closestPoint(query), {1.0, 0.0, 0.0});
   }
 
-  const Vec3 local = query - center;
+  const Vec3 local = toLocalPoint(query);
   const Vec3 distance_to_face{
       half_extents.x - std::abs(local.x),
       half_extents.y - std::abs(local.y),
@@ -355,7 +426,7 @@ Vec3 ReferenceGeometry::normalAt(const Vec3& query) const {
   } else {
     normal.z = (local.z >= 0.0) ? 1.0 : -1.0;
   }
-  return normal;
+  return toWorldDirection(normal);
 }
 
 double ReferenceGeometry::boundingRadius() const {
@@ -366,6 +437,24 @@ double ReferenceGeometry::boundingRadius() const {
     return 1.0e9;
   }
   return norm(half_extents);
+}
+
+Vec3 ReferenceGeometry::toLocalPoint(const Vec3& world_point) const {
+  return matMul(transpose(rotation), world_point - center);
+}
+
+Vec3 ReferenceGeometry::toWorldPoint(const Vec3& local_point) const { return center + matMul(rotation, local_point); }
+
+Vec3 ReferenceGeometry::toLocalDirection(const Vec3& world_direction) const {
+  return matMul(transpose(rotation), world_direction);
+}
+
+Vec3 ReferenceGeometry::toWorldDirection(const Vec3& local_direction) const {
+  return normalized(matMul(rotation, local_direction), {1.0, 0.0, 0.0});
+}
+
+bool ReferenceGeometry::hasIdentityRotation(double tolerance) const {
+  return isIdentityRotation(rotation, tolerance);
 }
 
 std::string AnalyticReferenceBackend::name() const { return "analytic"; }

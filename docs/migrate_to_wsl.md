@@ -1,14 +1,8 @@
 # Migrate To WSL
 
-This document is now the stage-2 WSL status note, not a future placeholder.
+This document is now the stage-3 WSL status note.
 
-The repository has already been advanced onto a WSL2 Ubuntu path with real backend integration priorities:
-
-- real SDF backend first
-- real reference backend second
-- solver backend optional
-
-## Current WSL Integration Status
+## Current WSL Status
 
 Validated on WSL2 Ubuntu 22.04:
 
@@ -18,66 +12,59 @@ Validated on WSL2 Ubuntu 22.04:
 - `python3`
 - `pytest`
 
-Dependencies currently detected in the validated path:
+Detected dependencies on the validated path:
 
 - `Eigen3`
 - `OpenVDB`
-  - detected through local `libopenvdb-dev` header extraction plus system library linking
 - `FCL`
-  - detected from system package / CMake config
 
-Dependencies currently not detected in the validated path:
+Not detected on the validated path:
 
 - `NanoVDB`
 - `hpp-fcl`
 - `Siconos`
 
-## What Is Actually Real On WSL Now
+## What Is Actually Real On WSL
 
-Real backend paths:
+Real benchmark-path backends:
 
 1. `OpenVdbSdfProvider`
    - real sphere / box level-set generation
+   - rotated primitive box support for the current benchmark path
    - real world-space sampling inside the trusted narrow band
-   - explicit narrow-band handling
-
 2. `FclReferenceBackend`
-   - real `fcl::distance`
-   - real `fcl::collide`
-   - nearest points and collision normal for primitive cases
+   - real distance / collision queries
+   - rotated box transforms through the current primitive benchmark path
 
-Still optional / fallback:
+Still optional / non-mainline:
 
 - `NanoVdbSdfProvider`
 - `HppFclReferenceBackend`
 - `OptionalSiconosSolver`
 
-## Examples Running On Real Backends
+## What Now Runs On The Real Benchmark Path
 
-Validated examples on the current WSL path:
+Validated examples:
 
 - `ex01_nanovdb_hello`
-  - real `OpenVDB`
 - `ex02_hppfcl_distance`
-  - real `FCL`
 - `ex03_dual_sdf_gap`
-  - analytic vs real `OpenVDB`
 - `ex04_single_step_contact`
-  - selected SDF backend can be `OpenVDB`
-  - solver remains `SimpleCcpSolver`
 - `ex05_compare_backends`
-  - analytic reference vs real `FCL`
-  - analytic SDF vs real `OpenVDB`
 - `ex06_regression_smoke`
-  - keeps the minimal end-to-end path intact
+
+Validated benchmark configs:
+
+- `primitive_smoke`
+- `gap_sweep`
+- `orientation_sweep`
+- `resolution_sweep`
+
+Validated suite:
+
+- `default`
 
 ## Recommended WSL Workflow
-
-Bootstrap:
-
-```bash
-bash scripts/bootstrap_wsl.sh
-```
 
 Configure and build:
 
@@ -86,85 +73,65 @@ bash scripts/configure_wsl.sh Release
 bash scripts/build_wsl.sh Release
 ```
 
-Run examples, CTest, and Python smoke:
+Functional smoke:
 
 ```bash
 bash scripts/run_all_examples_wsl.sh Release
 ```
 
-Manual validation commands:
+Single benchmark:
 
 ```bash
-./build/wsl-release/bin/Release/ex01_nanovdb_hello
-./build/wsl-release/bin/Release/ex02_hppfcl_distance
-./build/wsl-release/bin/Release/ex03_dual_sdf_gap
-./build/wsl-release/bin/Release/ex05_compare_backends
-ctest --test-dir build/wsl-release --output-on-failure
-PYTHONPATH=python python3 -m pytest tests/test_python_smoke.py -q
+bash scripts/run_benchmark_wsl.sh Release configs/benchmarks/primitive_smoke.json
 ```
 
-## Practical Notes
+Default paper-benchmark smoke:
 
-### OpenVDB
+```bash
+bash scripts/run_default_suite_wsl.sh Release
+```
 
-The stage-2 implementation uses this convention:
+Manual validation:
 
-- queries are in world frame
-- voxel size is in world units
-- narrow-band width is expressed in voxel units
-- the OpenVDB transform is a linear axis-aligned world/grid map
+```bash
+PYTHONPATH=python python3 -m baseline.run_benchmark --config configs/benchmarks/primitive_smoke.json --build-config Release
+PYTHONPATH=python python3 -m baseline.run_benchmark --suite default --build-config Release
+ctest --test-dir build/wsl-release --output-on-failure
+PYTHONPATH=python python3 -m pytest tests/test_python_smoke.py tests/test_benchmark_runner.py -q
+```
 
-Because the current examples are primitive-backed:
+## What The Stage-3 Benchmark Layer Adds
 
-- inside the trusted OpenVDB band, sampling is real OpenVDB
-- outside that band, the provider explicitly falls back to the analytic primitive extension
+`ex05_compare_backends` now provides:
 
-This is deliberate.
-Without that handling, center-point queries on truncated narrow-band grids would feed clipped distances into the dual-SDF formula.
+- config-driven benchmark execution
+- sample-level CSV / JSON output
+- aggregate summary CSV / JSON
+- markdown report
+- resolved config snapshot
+- environment snapshot
+- suite-level aggregate tables
 
-### FCL
-
-The current real reference backend covers:
-
-- sphere-sphere
-- sphere-box
-- box-box
-
-Unsupported shapes still fall back to the analytic backend logic.
+This is the main WSL deliverable for current paper experiments.
 
 ## Best Next Steps
 
-The next three modules worth spending time on are:
+The next three modules worth extending are:
 
-1. `NanoVDB`
-   - add a real read-only query path from generated `OpenVDB` grids
-2. `hpp-fcl`
-   - add a real backend, then let WSL prefer it over `FCL`
-3. richer SDF assets
-   - mesh-to-level-set generation
-   - file loading
-   - benchmark cases beyond primitive pairs
+1. mesh-backed benchmark execution
+   - the config model is ready
+   - execution path is still intentionally blocked until primitive experiments are exhausted
+2. richer benchmark postprocess
+   - current CSV / JSON / markdown outputs are enough for plotting
+   - next value is more opinionated table export for the paper
+3. `NanoVDB` or `hpp-fcl`
+   - only after the primitive benchmark matrix is stable
 
 ## What Still Should Not Be The Main Focus
 
-Not recommended as the immediate next priority:
+Not recommended as the next priority:
 
 1. `Siconos`
-   - optional solver work is still lower value than geometry-layer validation
-2. pybind11 bindings
-   - the subprocess-based Python workflow is already sufficient for this stage
-3. dynamic reconstruction / streaming SDF updates
-   - not worth doing before static real-backend benchmarks are stable
-
-## Current Stage Summary
-
-The project is no longer just a Windows fallback skeleton.
-
-Stage-2 WSL now has:
-
-- real `OpenVDB` SDF support
-- real `FCL` reference support
-- upgraded benchmark-style examples
-- backend-aware tests that pass or skip cleanly
-
-The solver backend remains intentionally conservative in this phase.
+2. GUI or heavyweight visualization
+3. large-scale parallel optimization
+4. deep `hpp-fcl` work while `FCL` already supports the paper mainline
